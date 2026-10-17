@@ -118,7 +118,7 @@ struct ContentView: View {
                         .font(.system(size: 17, weight: selected ? .semibold : .regular))
                         .foregroundStyle(selected ? Theme.onSignal : Theme.ink2)
                         .overlay(alignment: .topTrailing) {
-                            if screen == .activity && (model.snapshot?.newChanges ?? 0) > 0 && !selected {
+                            if screen == .activity && model.hasUnseenActivity && !selected {
                                 Circle().fill(Theme.loss).frame(width: 8, height: 8).offset(x: 4, y: -2)
                             }
                         }

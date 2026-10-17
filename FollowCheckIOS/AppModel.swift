@@ -362,9 +362,20 @@ final class AppModel {
     }
     func clearLogs() { events.removeAll(); persistEvents(); webCoordinator?.control("clearLogs") }
     func attach(_ coordinator: FollowCheckWebCoordinator) { webCoordinator = coordinator }
+    /// The last check whose changes were opened in Activity, per account.
+    var seenActivityStamp = ""
+    var hasUnseenActivity: Bool {
+        guard let snapshot, (snapshot.newChanges ?? 0) > 0, !accountId.isEmpty else { return false }
+        let seen = seenActivityStamp.isEmpty ? UserDefaults.standard.string(forKey: "followcheck.activity.seen.\(accountId)") ?? "" : seenActivityStamp
+        return seen != snapshot.lastScanAt
+    }
     func select(_ destination: Screen) {
         if destination == .relations { loadRelations() }
         screen = destination
+        if destination == .activity, let stamp = snapshot?.lastScanAt, !accountId.isEmpty {
+            seenActivityStamp = stamp
+            UserDefaults.standard.set(stamp, forKey: "followcheck.activity.seen.\(accountId)")
+        }
         if destination == .activity { webCoordinator?.control("logs") }
         if destination == .watchlist { webCoordinator?.control("state") }
     }
@@ -692,7 +703,7 @@ final class AppModel {
             if p["connected"] as? Bool == true, let photo = p["profilePicUrl"] as? String, !photo.isEmpty { profilePhotoURL = photo }
             if p["connected"] as? Bool == true && !next.isEmpty {
                 if accountId != next {
-                    tools.resetAccount()
+                    tools.resetAccount(); seenActivityStamp = ""
                     snapshot = nil; targets = []; watchEvents = []; accountEvents = []; watchlistAccounts = []; watchlistListTarget = ""; conversations = []; directMessages = []; inboxLoaded = false; relations = []; relationsReady = false; accountId = next
                     if let data = UserDefaults.standard.data(forKey: "followcheck.snapshot.\(next)") { snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) }
                     Task { await tools.load() }
