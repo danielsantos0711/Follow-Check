@@ -1,0 +1,694 @@
+--- a/Extension/background.js
++++ b/Extension/background.js
+@@ -83,6 +83,7 @@
+ let diagnosticCheckId = "";
+ let watchlistProgressWriteAt = 0;
+ let activeMonitorPacing = { ...DEFAULT_MONITOR_PACING };
++let monitorSuccessfulPageCount = 0;
+ 
+ function safeBackgroundMeta(meta = {}, depth = 0) {
+   if (depth > 5) return "[profundidade limitada]";
+@@ -1297,6 +1298,9 @@
+     responseKind: result.responseKind || "unknown",
+     durationMs: Number(result.durationMs || 0),
+     retryAfter: Number(result.retryAfter || 0),
++    apiMessage: result.apiMessage || "",
++    apiErrorType: result.apiErrorType || "",
++    restrictionSignal: result.restrictionSignal || null,
+   };
+ }
+ 
+@@ -1775,45 +1779,70 @@
+   throw failure;
+ }
+ 
++function monitorMainListPage(payload, executor) {
++  const users = payload.users.map(monitorUser);
++  if (users.some(user => !/^\d{1,32}$/.test(user.id))) {
++    throw monitorFailure("A lista contém identidades inválidas. A referência anterior foi preservada.", "shape_changed");
++  }
++  const cursor = [payload.next_max_id, payload.next_cursor, payload.next_max_id_str]
++    .find(value => value != null && String(value) !== "") ?? null;
++  if (cursor !== null && ((typeof cursor !== "string" && (typeof cursor !== "number" || !Number.isSafeInteger(cursor))) || String(cursor).length > 2048)) {
++    throw monitorFailure("O cursor da lista não tem um formato que possa ser transmitido sem perda.","pagination_cursor_invalid");
++  }
++  if ((payload.has_more === true && cursor === null) || (payload.has_more === false && cursor !== null)) {
++    throw monitorFailure("O Instagram devolveu sinais de paginação contraditórios. A lista não foi tratada como completa.", "pagination_incomplete");
++  }
++  return {
++    users,
++    expected: Number(payload.total_count || payload.count || 0),
++    hasNext: cursor !== null,
++    cursor,
++    executor,
++  };
++}
++
+ async function monitorFetchPage(kind, transport, userId, cursor, viewerUserId = userId) {
+   if (transport === "main") {
+-    const path = new URL(monitorRestUrl(kind, userId, cursor)).pathname
+-      + new URL(monitorRestUrl(kind, userId, cursor)).search;
++    const url = new URL(monitorRestUrl(kind, userId, cursor));
++    const path = url.pathname + url.search;
+     const response = await executeInstagramPageRequest(path);
+     if (!response?.ok || !Array.isArray(response?.data?.users)) {
+       const status = Number(response?.status || 0);
+-      if (status === 429) {
++      if (status === 429 || response?.code === "rate_limited") {
+         const failure=monitorFailure("A leitura da lista recebeu HTTP 429. A recolha parou sem mudar de canal.","rate_limited",429);
+         failure.retryAfter=Number(response?.retryAfter)||0;
+         throw failure;
+       }
+-      if (response?.securityWarning || response?.code === "instagram_security_warning") {
++      if (response?.securityWarning || ["instagram_security_warning", "challenge_required"].includes(response?.code)) {
+         const failure = monitorFailure(
+           "O Instagram apresentou um aviso de segurança. O FollowCheck parou e não fará mais pedidos até confirmares o aviso no Instagram.",
+-          "instagram_security_warning",
++          response?.code === "challenge_required" ? "challenge_required" : "instagram_security_warning",
+           status,
+         );
+         failure.transport = "page-main";
+         throw failure;
+       }
++      if (response?.code === "soft_throttle") {
++        const failure=monitorFailure("O Instagram sinalizou uma restrição temporária de atividade. O check parou e a referência anterior foi preservada.","soft_throttle",status);
++        failure.retryAfter=Number(response?.retryAfter)||0;
++        failure.restrictionSignal=response?.restrictionSignal || null;
++        failure.transport="page-main";
++        throw failure;
++      }
++      const failureCode = response?.code || (status === 400 ? "list_request_rejected" :
++        status === 401 || status === 403 ? "page_main_rejected" : status > 0 ? "list_response_invalid" : "page_main_unavailable");
++      const detail = backgroundRedact(String(response?.apiMessage || "").replace(/https?:\/\/[^\s<>]+/gi,"[URL removido]"), 200);
+       const failure = monitorFailure(
+-        status === 401 || status === 403
+-          ? "A página Instagram recusou temporariamente a leitura autenticada."
+-          : "A página Instagram não devolveu a lista de relações.",
+-        status === 401 || status === 403 ? "page_main_rejected" : "page_main_unavailable",
+-        status,
++        `O Instagram ${status > 0 ? `recusou a leitura da lista (HTTP ${status})` : "não respondeu à leitura da lista"}${detail ? `: ${detail}` : "."}`,
++        failureCode, status,
+       );
+       failure.transport = "page-main";
++      failure.apiMessage = detail;
++      failure.apiErrorType = response?.apiErrorType || "";
++      failure.retryAfter = Number(response?.retryAfter) || 0;
+       throw failure;
+     }
+-    const payload = response.data;
+-    return {
+-      users: payload.users.map(monitorUser).filter((user) => user.id),
+-      expected: Number(payload.count || payload.total_count || 0),
+-      hasNext: Boolean(payload.next_max_id ?? payload.next_cursor ?? payload.next_max_id_str),
+-      cursor: payload.next_max_id ?? payload.next_cursor ?? payload.next_max_id_str ?? null,
+-      executor: response.executor || "page-main",
+-    };
++    return monitorMainListPage(response.data, response.executor || "page-main");
+   }
+   if (transport === "private") {
+     return monitorFetchPrivatePage(kind, userId, cursor, viewerUserId);
+@@ -1861,7 +1890,9 @@
+   iosCheckpointsLoaded=true;
+   const stored=await chrome.storage.local.get(IOS_CHECKPOINT_KEY);
+   for(const [key,value] of Object.entries(stored[IOS_CHECKPOINT_KEY]||{})) {
+-    if(Date.now()-Number(value?.at)<15*60_000 && Number(value?.at)<=Date.now() && Array.isArray(value.users) && Array.isArray(value.cursors))iosListCheckpoints.set(key,value);
++    if(value?.paginationVersion === 4 &&
++       Date.now()-Number(value.at)<15*60_000 && Number(value.at)<=Date.now() &&
++       Array.isArray(value.users) && Array.isArray(value.cursors))iosListCheckpoints.set(key,value);
+   }
+ }
+ function persistIOSListCheckpoints() {
+@@ -1876,7 +1907,59 @@
+   for (const [key,value] of iosListCheckpoints) if (!profileId || value.profileId === profileId) iosListCheckpoints.delete(key);
+   void persistIOSListCheckpoints().catch(()=>{});
+ }
+-async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId = userId) {
++async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId = userId, options = {}) {
++  let knownTotal = Number.isSafeInteger(options.expected) && options.expected >= 0 ? options.expected : null;
++  const checkpointKey = `${viewerUserId}:${profileId}:${userId}:${kind}`;
++  await restoreIOSListCheckpoints();
++  const saved = globalThis.__FOLLOWCHECK_IOS_SHELL__ ? iosListCheckpoints.get(checkpointKey) : null;
++  let surplusCandidate = null;
++  if (options.allowStableSurplus === true && saved?.paginationVersion === 4 && saved.pass === 2 &&
++      Date.now()-Number(saved.at) < 15*60_000 && Number(saved.at) <= Date.now() &&
++      saved.knownTotal === knownTotal && saved.surplusCandidate?.expected === knownTotal &&
++      saved.surplusCandidate.ids?.length > knownTotal &&
++      sameMonitorIdentitySet(saved.surplusCandidate.ids,saved.surplusCandidate.ids)) {
++    surplusCandidate = saved.surplusCandidate;
++  }
++  // A recovery is a fresh traversal, never a union of different observations.
++  // Otherwise membership churn with an unchanged count could fabricate completeness.
++  for (let pass = 1; pass <= 2; pass += 1) {
++    const result = await monitorCollectListPass(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId, {knownTotal, pass, surplusCandidate});
++    const surplusEligible = options.allowStableSurplus === true && knownTotal !== null &&
++      result.terminal === true && result.users.length > knownTotal && result.duplicates === 0;
++    if (surplusEligible && surplusCandidate && surplusCandidate.expected === knownTotal &&
++        sameMonitorIdentitySet(surplusCandidate.ids,result.users.map(user=>String(user.id)))) {
++      const verified={...result,enumerationVerified:true,countVerified:false,validationMode:"stable-surplus",independentPasses:2,stableIdentityIds:surplusCandidate.ids};
++      postMonitorDiagnostic(profileId,"enumeration_stable",{list:kind,observed:result.users.length,reported:knownTotal,independentPasses:2,countVerified:false});
++      return verified;
++    }
++    if (knownTotal === null || result.coverageComplete || result.pass >= 2) return result;
++    if (typeof options.recheckExpected === "function") {
++      const fresh = await options.recheckExpected();
++      if (!Number.isSafeInteger(fresh) || fresh < 0) throw monitorFailure("O perfil não confirmou um total exato após a leitura.","watch_counts_unavailable");
++      postMonitorDiagnostic(profileId,"count_rechecked",{list:kind,before:knownTotal,after:fresh,collected:result.users.length,duplicates:result.duplicates});
++      // A shortage still blocks comparison. A surplus can only be accepted after
++      // one independent traversal returns the very same identities.
++      if (fresh === knownTotal && result.duplicates === 0 && !surplusEligible) return result;
++      if (surplusEligible && fresh === knownTotal) surplusCandidate={expected:knownTotal,ids:result.users.map(user=>String(user.id))};
++      knownTotal = fresh;
++    } else if (surplusEligible) {
++      surplusCandidate={expected:knownTotal,ids:result.users.map(user=>String(user.id))};
++    }
++    iosListCheckpoints.delete(checkpointKey);
++    await persistIOSListCheckpoints();
++    postMonitorDiagnostic(profileId, "coverage_retry", {
++      list: kind, pass, users: result.users.length, expected: knownTotal,
++      duplicates: result.duplicates, receivedUsers: result.receivedUsers,
++    });
++    postMonitorProgress(profileId, "A confirmar a cobertura",
++      `${result.users.length} de ${knownTotal} perfis • uma releitura de ${kind === "followers" ? "seguidores" : "contas seguidas"}`,
++      Math.max(rangeStart, rangeEnd - 1));
++    await monitorSleep(Math.max(10000, activeMonitorPacing.pageDelayMaxMs));
++    globalThis.__FOLLOWCHECK_IOS_ASSERT_ACTIVE__?.();
++  }
++}
++
++async function monitorCollectListPass(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId = userId, options = {}) {
+   // A primeira tentativa corre no mundo MAIN da página autenticada. Evita depender
+   // de cookies HttpOnly invisíveis ao content-script e elimina o ciclo REST →
+   // GraphQL que deixava a interface parada nos 21–23%.
+@@ -1891,15 +1974,20 @@
+   const users = new Map();
+   let cursor = null;
+   let hasNext = true;
+-  let expected = 0;
++  const knownTotal = options.knownTotal ?? null;
++  let expected = knownTotal ?? 0;
+   let pageNumber = 0;
++  let receivedUsers = 0;
++  let pass = options.pass || 1;
+   await restoreIOSListCheckpoints();
+   const checkpointKey = `${viewerUserId}:${profileId}:${userId}:${kind}`;
+   const checkpoint = globalThis.__FOLLOWCHECK_IOS_SHELL__ ? iosListCheckpoints.get(checkpointKey) : null;
+-  if (checkpoint && Date.now()-checkpoint.at < 15*60_000) {
++  if (checkpoint && checkpoint.paginationVersion === 4 && checkpoint.knownTotal === knownTotal && Date.now()-checkpoint.at < 15*60_000) {
+     checkpoint.users.forEach(user=>users.set(user.id,user));
+     checkpoint.cursors.forEach(value=>cursors.add(value));
+     cursor=checkpoint.cursor;hasNext=checkpoint.hasNext;expected=checkpoint.expected;pageNumber=checkpoint.pageNumber;
++    receivedUsers=checkpoint.receivedUsers;pass=checkpoint.pass || pass;
++    monitorSuccessfulPageCount=Math.max(monitorSuccessfulPageCount,Number(checkpoint.scanPageCount)||0);
+     postMonitorDiagnostic(profileId,'checkpoint_resumed',{list:kind,users:users.size,page:pageNumber});
+   } else { iosListCheckpoints.delete(checkpointKey); }
+   const transportAttempts = [];
+@@ -1921,6 +2009,9 @@
+         code: String(error?.code || "transport_failed"),
+         status: Number(error?.status || 0),
+         pages: pageNumber,
++        apiMessage: error?.apiMessage || "",
++        apiErrorType: error?.apiErrorType || "",
++        restrictionSignal: error?.restrictionSignal || null,
+       });
+       postMonitorDiagnostic(profileId, "transport_stopped", {
+         list: kind,
+@@ -1928,6 +2019,9 @@
+         code: String(error?.code || "transport_failed"),
+         status: Number(error?.status || 0),
+         pages: pageNumber,
++        apiMessage: error?.apiMessage || "",
++        apiErrorType: error?.apiErrorType || "",
++        restrictionSignal: error?.restrictionSignal || null,
+       });
+       if (["logout_confirmed", "challenge_required", "rate_limited"].includes(error?.code)) throw error;
+       let nextTransport = null;
+@@ -1963,8 +2057,11 @@
+       continue;
+     }
+ 
+-    expected ||= page.expected;
++    if (knownTotal === null) expected ||= page.expected;
++    const previousSize = users.size;
+     page.users.forEach((user) => users.set(user.id, user));
++    receivedUsers += page.users.length;
++    monitorSuccessfulPageCount += 1;
+     hasNext = page.hasNext;
+     cursor = page.cursor;
+     pageNumber += 1;
+@@ -1975,6 +2072,11 @@
+       users: users.size,
+       expected,
+       hasNext,
++      pass,
++      received: page.users.length,
++      added: users.size - previousSize,
++      duplicates: page.users.length - (users.size - previousSize),
++      receivedUsers,
+     });
+     if (hasNext) {
+       const cursorKey = String(cursor || "");
+@@ -1988,14 +2090,14 @@
+       cursors.add(cursorKey);
+     }
+     if (globalThis.__FOLLOWCHECK_IOS_SHELL__) {
+-      iosListCheckpoints.set(checkpointKey,{profileId,at:Date.now(),users:[...users.values()],cursors:[...cursors],cursor,hasNext,expected,pageNumber});
++      iosListCheckpoints.set(checkpointKey,{paginationVersion:4,profileId,at:Date.now(),users:[...users.values()],cursors:[...cursors],cursor,hasNext,expected,knownTotal,pageNumber,receivedUsers,pass,scanPageCount:monitorSuccessfulPageCount,surplusCandidate:options.surplusCandidate || null});
+       await persistIOSListCheckpoints().catch(()=>{});
+     }
+     const fraction = hasNext
+       ? expected > 0
+         ? Math.min(0.98, users.size / expected)
+         : Math.min(0.95, pageNumber / (pageNumber + 3))
+-      : 1;
++      : knownTotal === null || users.size === knownTotal ? 1 : Math.min(0.98, users.size / Math.max(1, knownTotal));
+     const percentage = Math.round(rangeStart + fraction * (rangeEnd - rangeStart));
+     const channel = transport === "main" ? "Página Instagram" : transport === "private" ? "Pulse" : transport === "rest" ? "Web" : "GraphQL";
+     postMonitorProgress(
+@@ -2012,7 +2114,7 @@
+       );
+       if (activeMonitorPacing.pauseEveryPages > 0
+           && activeMonitorPacing.pauseDurationMs > 0
+-          && pageNumber % activeMonitorPacing.pauseEveryPages === 0) {
++          && monitorSuccessfulPageCount % activeMonitorPacing.pauseEveryPages === 0) {
+         const pause = activeMonitorPacing.pauseDurationMs;
+         postMonitorProgress(
+           profileId,
+@@ -2027,7 +2129,7 @@
+   // Nunca promover uma leitura materialmente truncada a snapshot válido.
+   // Isto protege contra falsos follows/unfollows quando a paginação do Instagram
+   // termina cedo ou devolve páginas inconsistentes.
+-  if (expected > 0) {
++  if (knownTotal === null && expected > 0) {
+     const tolerance = Math.min(Math.max(0, expected - 1), Math.floor(expected * 0.005));
+     if (Math.abs(users.size - expected) > tolerance) {
+       iosListCheckpoints.delete(checkpointKey);
+@@ -2037,25 +2139,39 @@
+       );
+     }
+   }
++  const coverageComplete = knownTotal === null ? (expected > 0 ? users.size === expected : null) : users.size === knownTotal;
++  const outcome = coverageComplete === false ? "incomplete" : knownTotal === null && expected === 0 ? "exhausted" : "success";
+   transportAttempts.push({
+     transport,
+-    outcome: "success",
++    outcome,
+     status: 200,
+     pages: pageNumber,
+     users: users.size,
+   });
+-  postMonitorDiagnostic(profileId, "transport_success", {
++  postMonitorDiagnostic(profileId, outcome === "success" ? "transport_success" : "list_coverage_" + outcome, {
+     list: kind,
+     transport,
+     pages: pageNumber,
+     users: users.size,
+     expected,
++    pass,
++    receivedUsers,
++    duplicates: receivedUsers - users.size,
++    coverageComplete,
+   });
+   return {
+     users: [...users.values()],
+     transport,
+     pages: pageNumber,
+     expected,
++    coverageComplete,
++    terminal:true,
++    enumerationVerified:coverageComplete === true,
++    countVerified:coverageComplete === true,
++    validationMode:coverageComplete === true ? "count-matched" : "unverified",
++    pass,
++    receivedUsers,
++    duplicates: receivedUsers - users.size,
+     attempts: transportAttempts,
+   };
+ }
+@@ -2747,20 +2863,47 @@
+   return writeWatchlistState(ownerId, next);
+ }
+ 
+-function assertWatchlistCoverage(before,after,followers,following) {
++function sameMonitorIdentitySet(left,right) {
++  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
++  if (![left,right].every(values=>values.every(id=>/^\d{1,32}$/.test(String(id))))) return false;
++  const ids=new Set(left.map(String));
++  return ids.size===left.length && new Set(right.map(String)).size===right.length && right.every(id=>ids.has(String(id)));
++}
++
++function watchlistListProof(result,reported) {
++  const observed=result?.users?.length;
++  if (result?.terminal !== true || !Number.isSafeInteger(reported) || reported < 0) return null;
++  if (observed === reported) return {mode:"count-matched",terminal:true,observed,reported};
++  if (observed > reported && result.enumerationVerified === true && result.validationMode === "stable-surplus" && result.independentPasses === 2 &&
++      result.duplicates === 0 && sameMonitorIdentitySet(result.stableIdentityIds,result.users.map(user=>String(user.id)))) {
++    return {mode:"stable-surplus",terminal:true,observed,reported,independentPasses:2,stableIdentityIds:result.stableIdentityIds.map(String)};
++  }
++  return null;
++}
++
++function assertWatchlistCoverage(before,after,followers,following,lists=null) {
+   const coverage={followers,following,reportedFollowers:after.reportedFollowers,reportedFollowing:after.reportedFollowing};
+   if (before.reportedFollowers!==after.reportedFollowers || before.reportedFollowing!==after.reportedFollowing ||
+-      !Number.isSafeInteger(after.reportedFollowers) || !Number.isSafeInteger(after.reportedFollowing) ||
+-      followers!==after.reportedFollowers || following!==after.reportedFollowing) {
++      !Number.isSafeInteger(after.reportedFollowers) || after.reportedFollowers < 0 || !Number.isSafeInteger(after.reportedFollowing) || after.reportedFollowing < 0 ||
++      (lists ? lists.followers?.users?.length !== followers || lists.following?.users?.length !== following ||
++        !watchlistListProof(lists.followers,after.reportedFollowers) || !watchlistListProof(lists.following,after.reportedFollowing) :
++        followers!==after.reportedFollowers || following!==after.reportedFollowing)) {
+     const error=monitorFailure(`Leitura parcial: ${followers}/${after.reportedFollowers ?? '?'} seguidores e ${following}/${after.reportedFollowing ?? '?'} a seguir. Não foram calculadas mudanças.`,"watch_coverage_incomplete");
+     error.coverage=coverage;throw error;
+   }
+ }
+ 
+ function validWatchlistComparisonSnapshot(snapshot, viewer, target) {
+-  if (!snapshot || snapshot.comparisonVersion !== 3 || snapshot.complete !== true ||
++  if (!snapshot || ![3,4].includes(snapshot.comparisonVersion) || snapshot.complete !== true ||
+       String(snapshot.viewerUserId) !== String(viewer) || String(snapshot.target?.id) !== String(target)) return false;
+-  if(snapshot.followers?.length!==snapshot.target?.reportedFollowers || snapshot.following?.length!==snapshot.target?.reportedFollowing) return false;
++  if(snapshot.comparisonVersion===3 && (snapshot.followers?.length!==snapshot.target?.reportedFollowers || snapshot.following?.length!==snapshot.target?.reportedFollowing)) return false;
++  if(snapshot.comparisonVersion===4 && !['followers','following'].every(kind=>{
++    const proof=snapshot.listValidation?.[kind],users=snapshot[kind];
++    const reported=snapshot.target?.[kind==='followers'?'reportedFollowers':'reportedFollowing'];
++    if(!proof || proof.terminal!==true || !Array.isArray(users) || proof.observed!==users.length || proof.reported!==reported || !Number.isSafeInteger(reported) || reported<0)return false;
++    if(proof.mode==='count-matched')return users.length===reported;
++    return proof.mode==='stable-surplus' && users.length>reported && proof.independentPasses===2 && sameMonitorIdentitySet(proof.stableIdentityIds,users.map(user=>String(user.id)));
++  }))return false;
+   return ['followers','following'].every(key => Array.isArray(snapshot[key]) &&
+     snapshot[key].every(user => /^\d{1,32}$/.test(String(user?.id || ''))) &&
+     new Set(snapshot[key].map(user => String(user.id))).size === snapshot[key].length);
+@@ -2768,38 +2911,42 @@
+ 
+ function watchlistEventsFromResult(target, result) {
+   const at = Number(result?.completedAt || Date.now());
++  const countVerified=result?.coverageVerified !== false;
++  const warningEvents=(result?.coverageWarnings||[]).map(detail=>({...watchlistEvent(target,"watch_count_warning","Contador do perfil divergente",detail,null,at),comparisonVerified:false,coverageVerified:false}));
+   if (result?.baseline) {
+-    return [watchlistEvent(target, "watch_baseline", "Referência criada", "Primeiro snapshot completo guardado.", null, at)];
++    return [{...watchlistEvent(target, "watch_baseline", "Referência criada", countVerified?"Primeiro snapshot completo guardado.":"Referência das listas visíveis criada; existe divergência no contador do perfil.", null, at),coverageVerified:countVerified,enumerationVerified:true},...warningEvents];
+   }
+   if (result?.comparisonVerified !== true) return [];
+   const changes = result?.changes || {};
+   const events = [];
+-  const addPeople = (key, type, title, detail) => {
++  const followersVerified=result?.relationCoverage?.followers !== false;
++  const followingVerified=result?.relationCoverage?.following !== false;
++  const addPeople = (key, type, title, detail, verified = countVerified) => {
+     for (const person of Array.isArray(changes[key]) ? changes[key] : []) {
+-      events.push(watchlistEvent(target, type, title, detail, person, at));
++      events.push({...watchlistEvent(target, type, title, detail, person, at),coverageVerified:verified});
+     }
+   };
+-  addPeople("newFollowers", "watch_new_follower", "Novo seguidor", "Começou a seguir esta conta.");
+-  addPeople("lostFollowers", "watch_lost_follower", "Deixou de seguir esta conta", "Saiu da lista completa de seguidores.");
+-  addPeople("startedFollowing", "watch_started_following", "Começou a seguir", "Esta conta começou a seguir este perfil.");
+-  addPeople("stoppedFollowing", "watch_stopped_following", "Esta conta deixou de seguir", "Esta conta deixou de seguir este perfil.");
++  addPeople("newFollowers", "watch_new_follower", followersVerified?"Novo seguidor":"Novo perfil na lista de seguidores", followersVerified?"Começou a seguir esta conta.":"Passou a aparecer na lista observada; existe divergência de contagem numa das referências.",followersVerified);
++  addPeople("lostFollowers", "watch_lost_follower", followersVerified?"Deixou de seguir esta conta":"Perfil deixou de aparecer nos seguidores", followersVerified?"Saiu da lista completa de seguidores.":"Ausência repetida na lista observada; não confirma a ação de unfollow.",followersVerified);
++  addPeople("startedFollowing", "watch_started_following", followingVerified?"Começou a seguir":"Novo perfil nas contas seguidas", followingVerified?"Esta conta começou a seguir este perfil.":"Passou a aparecer na lista observada; existe divergência de contagem numa das referências.",followingVerified);
++  addPeople("stoppedFollowing", "watch_stopped_following", followingVerified?"Esta conta deixou de seguir":"Perfil deixou de aparecer nas contas seguidas", followingVerified?"Esta conta deixou de seguir este perfil.":"Ausência repetida na lista observada; não confirma a ação de unfollow.",followingVerified);
+   addPeople("unavailableAccounts", "watch_account_unavailable", "Conta indisponível", "A relação mudou enquanto o perfil ficou indisponível.");
+   for (const change of Array.isArray(changes.profileChanges) ? changes.profileChanges : []) {
+     events.push(watchlistEvent(target, "watch_profile_change", String(change?.title || "Perfil alterado"), String(change?.detail || "Os dados do perfil mudaram."), null, at));
+   }
+-  return events.map(event => ({...event,comparisonVerified:true,coverageVerified:true,checkId:String(result.checkId||'')}));
++  return [...events.map(event => ({...event,comparisonVerified:true,coverageVerified:event.coverageVerified ?? countVerified,checkId:String(result.checkId||'')})),...warningEvents];
+ }
+ 
+ async function notifyWatchlistChanges(target, events, baseline) {
+   if (!target.notificationsEnabled || !chrome.notifications?.create) return;
+-  const meaningful = events.filter((event) => event.type !== "watch_baseline");
++  const meaningful = events.filter((event) => !["watch_baseline","watch_count_warning"].includes(event.type));
+   if (!meaningful.length && !baseline) return;
+   const title = baseline ? `@${target.username} está na Watchlist` : `@${target.username} mudou`;
+   const message = baseline
+-    ? "Referência completa criada. Os próximos checks vão mostrar apenas diferenças confirmadas."
++    ? target.coverageVerified === false ? "Referência das listas visíveis criada; o contador do perfil diverge." : "Referência completa criada. Os próximos checks vão mostrar apenas diferenças confirmadas."
+     : meaningful.length === 1
+       ? `${meaningful[0].title}${meaningful[0].username ? ` · @${meaningful[0].username}` : ""}`
+-      : `${meaningful.length} alterações confirmadas em seguidores, seguidos ou perfil.`;
++      : `${meaningful.length} alterações observadas em seguidores, seguidos ou perfil.`;
+   await chrome.notifications.create(`followcheck-watch-${target.id}-${Date.now()}`, {
+     type: "basic",
+     iconUrl: chrome.runtime.getURL("images/icon-128.png"),
+@@ -2845,13 +2992,17 @@
+     progress: null,
+     baselineReady: true,
+     comparisonReady: true,
+-    coverageVerified: true,
++    coverageVerified: result.coverageVerified !== false,
++    enumerationVerified: true,
++    coverageWarnings: result.coverageWarnings || [],
++    reportedFollowers: result.reportedCounts?.followers ?? null,
++    reportedFollowing: result.reportedCounts?.following ?? null,
+     lastAttemptCoverage: null,
+     followers: Number(result?.snapshot?.followers || 0),
+     following: Number(result?.snapshot?.following || 0),
+     lastRunAt: completedAt,
+     lastSuccessAt: completedAt,
+-    lastChangeCount: events.filter((event) => event.type !== "watch_baseline").length,
++    lastChangeCount: events.filter((event) => !["watch_baseline","watch_count_warning"].includes(event.type)).length,
+     lastError: "",
+     lastErrorCode: "",
+     nextRunAt: previous.enabled ? completedAt + Math.max(60, Math.min(43200, Number(previous.intervalMinutes || 1440))) * 60_000 : 0,
+@@ -3285,6 +3436,7 @@
+   await assertGlobalSafety("watchlist-scan");
+   await assertGlobalScanBudget("watchlist", pacing, message.manual === true);
+   activeMonitorPacing = pacing;
++  monitorSuccessfulPageCount = 0;
+   monitorJobRunning = true;
+   monitorJobStartedAt = Date.now();
+   const jobToken = ++monitorJobToken;
+@@ -3316,22 +3468,53 @@
+ 
+     postMonitorProgress(profileId, "Watchlist a iniciar", "A carregar o perfil na sessão e confirmar os totais", 1);
+     await backgroundLog("info", "watchlist", "preflight", "A validar os totais antes da recolha.", {checkId, stage:"profile-before", pacing, viewerConfirmed:!!viewerUserId});
+-    const target = await resolveWatchlistTarget({...message,requireCounts:true});
++    let target = await resolveWatchlistTarget({...message,requireCounts:true});
+     await backgroundLog("info", "watchlist", "profile-counts", "Totais iniciais recebidos.", {checkId, followers:target.reportedFollowers, following:target.reportedFollowing});
+     if (target.reportedFollowers === null || target.reportedFollowing === null) throw monitorFailure("O perfil não disponibilizou totais verificáveis. Não foi criada uma comparação.","watch_counts_unavailable");
++    const recheckTargetCount = kind => async () => {
++      const fresh=await resolveWatchlistTarget({...message,targetUserId:target.id,targetUsername:target.username,requireCounts:true});
++      if (fresh.id !== target.id) throw monitorFailure("A identidade mudou durante a confirmação do total.","watch_target_changed");
++      const previous=target;
++      // A counter change requires a fresh independent traversal. Preserve the
++      // uncollected list's original anchor; do not silently rebase a collected list.
++      target={...target,[kind === "following" ? "reportedFollowing" : "reportedFollowers"]:
++        fresh[kind === "following" ? "reportedFollowing" : "reportedFollowers"]};
++      await backgroundLog("info","watchlist","profile-count-recheck","Totais do perfil novamente confirmados antes de decidir uma releitura.",
++        {checkId,list:kind,before:previous[kind === "following" ? "reportedFollowing" : "reportedFollowers"],after:target[kind === "following" ? "reportedFollowing" : "reportedFollowers"]});
++      return target[kind === "following" ? "reportedFollowing" : "reportedFollowers"];
++    };
++    const assertCollectedCoverage = (kind,result) => {
++      if(result.coverageComplete !== false || result.enumerationVerified === true)return;
++      const expected=kind === "following" ? target.reportedFollowing : target.reportedFollowers;
++      const error=monitorFailure(`A lista de ${kind === "following" ? "contas seguidas" : "seguidores"} terminou com ${result.users.length} identidades únicas; o perfil anuncia ${expected}. A comparação foi interrompida sem voltar a repetir a lista.`,"watch_coverage_incomplete");
++      error.coverage={list:kind,collected:result.users.length,reported:expected,duplicates:result.duplicates||0};
++      throw error;
++    };
+     postMonitorProgress(profileId, `Watchlist · @${target.username}`, "A recolher as contas que segue", 3);
+     const followingResult = await monitorCollectList(
+       "following", target.id, profileId, 3, 46, String(viewerUserId),
++      {expected:target.reportedFollowing,recheckExpected:recheckTargetCount("following"),allowStableSurplus:true},
+     );
++    assertCollectedCoverage("following",followingResult);
++    if(activeMonitorPacing.pauseDurationMs>0) {
++      postMonitorProgress(profileId,"Pausa entre listas","A aguardar antes de começar a lista de seguidores",46);
++      await monitorSleep(activeMonitorPacing.pauseDurationMs);
++    }
+     postMonitorProgress(profileId, `Watchlist · @${target.username}`, "A recolher os seguidores", 47);
+     const followerResult = await monitorCollectList(
+       "followers", target.id, profileId, 47, 90, String(viewerUserId),
++      {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true},
+     );
++    assertCollectedCoverage("followers",followerResult);
+     const following = followingResult.users;
+     const followers = followerResult.users;
+     const finalTarget=await resolveWatchlistTarget({...message,targetUserId:target.id,targetUsername:target.username,requireCounts:true});
+     await backgroundLog("info", "watchlist", "coverage", "Comparação entre identidades recolhidas e totais do perfil.", {checkId, collectedFollowers:followers.length,collectedFollowing:following.length,beforeFollowers:target.reportedFollowers,beforeFollowing:target.reportedFollowing,afterFollowers:finalTarget.reportedFollowers,afterFollowing:finalTarget.reportedFollowing});
+-    assertWatchlistCoverage(target,finalTarget,followers.length,following.length);
++    assertWatchlistCoverage(target,finalTarget,followers.length,following.length,{followers:followerResult,following:followingResult});
++    const listValidation={followers:watchlistListProof(followerResult,finalTarget.reportedFollowers),following:watchlistListProof(followingResult,finalTarget.reportedFollowing)};
++    const countVerified=Object.values(listValidation).every(proof=>proof.mode==='count-matched');
++    const coverageWarnings=['followers','following'].filter(kind=>listValidation[kind].mode==='stable-surplus').map(kind=>
++      `${kind==='following'?'Contas seguidas':'Seguidores'}: ${listValidation[kind].observed} identidades observadas em duas recolhas iguais; contador do perfil: ${listValidation[kind].reported}.`);
+     const storageKey = watchlistStorageKey(viewerUserId, target.id);
+     const stored = await chrome.storage.local.get(storageKey).catch(() => ({}));
+     const candidate = stored?.[storageKey] || null;
+@@ -3365,7 +3548,8 @@
+     await chrome.storage.local.set({
+       [storageKey]: {
+         version: 2,
+-        comparisonVersion: 3,
++        comparisonVersion: 4,
++        listValidation,
+         viewerUserId: String(viewerUserId),
+         target,
+         followers,
+@@ -3381,6 +3565,12 @@
+     const result = {
+       event: "watchlist_result",
+       comparisonVerified: Boolean(previous),
++      coverageVerified: countVerified,
++      enumerationVerified: true,
++      coverageWarnings,
++      reportedCounts:{followers:finalTarget.reportedFollowers,following:finalTarget.reportedFollowing},
++      relationCoverage:{followers:listValidation.followers.mode==='count-matched' && (!previous || previous.comparisonVersion===3 || previous.listValidation?.followers?.mode==='count-matched'),
++        following:listValidation.following.mode==='count-matched' && (!previous || previous.comparisonVersion===3 || previous.listValidation?.following?.mode==='count-matched')},
+       profileId,
+       targetId,
+       checkId,
+@@ -3410,7 +3600,8 @@
+         profileChanges,
+       },
+       diagnostics: {
+-        snapshotValidation: "complete",
++        snapshotValidation: countVerified ? "count-matched" : "stable-visible-lists",
++        listValidation: Object.fromEntries(Object.entries(listValidation).map(([kind,proof])=>[kind,{mode:proof.mode,observed:proof.observed,reported:proof.reported}])),
+         transport: {
+           following: followingResult.transport,
+           followers: followerResult.transport,
+@@ -3433,7 +3624,9 @@
+         pendingNativeResult: result,
+       },
+     });
+-    postMonitorProgress(profileId, `Watchlist · @${target.username}`, "Snapshot completo guardado e comparado", 99);
++    const completionDetail=countVerified ? "Snapshot completo guardado e comparado." : "Listas visíveis verificadas e guardadas; contador do perfil divergente.";
++    postMonitorProgress(profileId, `Watchlist · @${target.username}`, completionDetail, 99);
++    if(coverageWarnings.length)await backgroundLog("warn","watchlist","profile-counter-divergence",coverageWarnings.join(" "),{checkId,countVerified:false,enumerationVerified:true});
+     await backgroundLog("info", "watchlist", "watchlist-check-completed", `Watchlist @${target.username} atualizada.`, {
+       followers: Number(result.snapshot?.followers || 0),
+       following: Number(result.snapshot?.following || 0),
+@@ -3443,7 +3636,7 @@
+       throw monitorFailure("O resultado da Watchlist ficou guardado, mas a ponte Android desligou antes da confirmação.", "native_bridge_unavailable");
+     }
+     nativePort.postMessage(result);
+-    postMonitorStopped(profileId, `Watchlist · @${target.username}`, "Snapshot completo guardado e comparado.", "completed");
++    postMonitorStopped(profileId, `Watchlist · @${target.username}`, completionDetail, "completed");
+     return result;
+   } catch (error) {
+     await tripSafetyFromError(error, "watchlist-scan").catch(() => null);
+@@ -3478,6 +3671,7 @@
+   await assertGlobalSafety("own-account-scan");
+   await assertGlobalScanBudget("own-account", pacing, message.manual === true);
+   activeMonitorPacing = pacing;
++  monitorSuccessfulPageCount = 0;
+   monitorJobRunning = true;
+   monitorJobStartedAt = Date.now();
+   const jobToken = ++monitorJobToken;
+--- a/Extension/page-executor.js
++++ b/Extension/page-executor.js
+@@ -38,7 +38,10 @@
+ 
+   function parseJson(text) {
+     if (!text || !/^[\s\r\n]*[\[{]/.test(text)) return null;
+-    try { return JSON.parse(text); } catch { return null; }
++    // Opaque numeric cursors and IDs must not cross IEEE-754 as rounded numbers.
++    const lossless = text.replace(/"(next_max_id|next_cursor|next_max_id_str|pk|pk_id|id)"\s*:\s*([1-9]\d*|0)(?=\s*[,}\]])/g,
++      (match, key, value) => Number.isSafeInteger(Number(value)) ? match : `"${key}":${JSON.stringify(value)}`);
++    try { return JSON.parse(lossless); } catch { return null; }
+   }
+ 
+   function compactPayload(payload) {
+@@ -53,6 +56,8 @@
+       status: payload.status,
+       message: payload.message,
+       error_type: payload.error_type,
++      spam: payload.spam,
++      feedback_required: payload.feedback_required,
+       friendship_status: payload.friendship_status,
+     };
+   }
+@@ -80,7 +85,7 @@
+       responseKind,
+       responseBytes: new TextEncoder().encode(text).length,
+       responseCategory: response.status === 429 ? "rate-limit-response" : /challenge_required|checkpoint_required/i.test(text) ? "challenge-marker" : /login_required/i.test(text) ? "login-marker" : data ? "json" : "unclassified",
+-      schema: data && typeof data === "object" ? ["status","user","data","users","items","inbox","thread","message","error_type","next_max_id","has_more"].filter(key => Object.prototype.hasOwnProperty.call(data,key)) : [],
++      schema: data && typeof data === "object" ? ["status","user","data","users","items","inbox","thread","message","error_type","spam","feedback_required","next_max_id","has_more"].filter(key => Object.prototype.hasOwnProperty.call(data,key)) : [],
+       data,
+     };
+   }
+@@ -743,6 +748,27 @@
+     };
+   }
+ 
++  function safeListErrorText(value, limit = 200) {
++    if (typeof value !== "string") return "";
++    return value.replace(/https?:\/\/[^\s<>]+/gi,"[URL removido]")
++      .replace(/\bBearer\s+[A-Za-z0-9._~+\/=:-]+/gi,"Bearer [REMOVIDO]")
++      .replace(/\b(sessionid|csrftoken|rank_token|access_token|authorization|password|passwd|cookie|token)\b["']?\s*[:=]\s*["']?[^\s,;}&"']+/gi,"$1=[REMOVIDO]")
++      .replace(/\b[A-Za-z0-9_-]{48,}\b/g,"[REMOVIDO]")
++      .replace(/[\r\n\t]+/g," ").slice(0,limit);
++  }
++
++  function listErrorCode(result) {
++    const detail = `${result.data?.error_type || ""} ${result.data?.message || ""}`;
++    if (result.status === 429 || /rate.?limit/i.test(detail)) return "rate_limited";
++    if (/challenge_required|checkpoint_required/i.test(detail)) return "challenge_required";
++    if (result.data?.spam === true || result.data?.feedback_required === true) return "soft_throttle";
++    if (/feedback_required|please wait a few minutes|try again later/i.test(detail)) return "soft_throttle";
++    if (result.status === 401 || result.status === 403 || /login_required/i.test(detail)) return "page_main_rejected";
++    if (result.status === 400) return "list_request_rejected";
++    if (!result.ok || result.data?.status === "fail" || result.data?.error_type || !Array.isArray(result.data?.users)) return "list_response_invalid";
++    return "";
++  }
++
+   async function executeMonitorList(message, signal) {
+     const kind = String(message.kind || "");
+     const userId = String(message.userId || "");
+@@ -765,8 +791,16 @@
+       };
+     }
+     const params = new URLSearchParams({ count: String(Math.max(12, Math.min(100, Number(message.count) || 100))), search_surface: "follow_list_page" });
++    // Use the web request format observed working in 2.5.7. The synthetic
++    // rank_token added in 2.5.8 is not part of this validated web contract.
+     const cursor = String(message.cursor || "");
+-    if (cursor && cursor.length <= 2048) params.set("max_id", cursor);
++    if (cursor.length > 2048 || (typeof message.cursor === "number" && !Number.isSafeInteger(message.cursor))) {
++      throw Object.assign(new Error('O cursor recebido não pode ser transmitido sem perda. A lista não foi repetida.'), {code:'pagination_cursor_invalid'});
++    }
++    if (cursor) params.set("max_id", cursor);
++    if (cursor && params.get("max_id") !== cursor) {
++      throw Object.assign(new Error('O cursor foi alterado durante a codificação.'), {code:'pagination_cursor_invalid'});
++    }
+     const endpoint = `/api/v1/friendships/${userId}/${kind}/?${params}`;
+     if ((document.hidden && globalThis.__FOLLOWCHECK_BACKGROUND_READ__ !== true) || /^\/(accounts|challenge|checkpoint|two_factor|oauth)(\/|$)/i.test(location.pathname)) {
+       throw Object.assign(new Error('A sessão aguarda a app ativa e o fim da autenticação.'), {code:'ios_paused'});
+@@ -784,12 +818,19 @@
+     });
+     const result = await readResponse(response, startedAt);
+     const securityWarning = pageSessionState().securityWarning;
++    const code = listErrorCode(result);
+     return {
+       operation: "monitor-list",
+       kind,
+       executor: "page-main",
+       ...result,
+-      ok: !securityWarning && result.ok && Array.isArray(result.data?.users),
++      ok: !securityWarning && !code,
++      code,
++      queryParameterNames: [...params.keys()],
++      apiMessage: code ? safeListErrorText(result.data?.message) : "",
++      apiErrorType: code ? safeListErrorText(result.data?.error_type, 80) : "",
++      restrictionSignal: result.data?.spam === true ? "spam" : result.data?.feedback_required === true ? "feedback_required" : null,
++      cursorEncodingVerified: !cursor || params.get("max_id") === cursor,
+       ...(securityWarning ? {
+         code: "instagram_security_warning",
+         message: "O Instagram apresentou um aviso de segurança. A leitura foi interrompida.",
+@@ -818,6 +859,16 @@
+       method:operation === "relationship" ? "mutation-and-verification" : ["ping","probe-session"].includes(operation) ? "local" : "GET",
+       parameterNames:["userId","username","mediaId","kind","cursor","count"].filter(key => message[key] != null && message[key] !== ""),
+       cursorPresent:!!message.cursor, requestedCount:Number(message.count)||null,
++      rankingPolicy:operation === "monitor-list" ? "web-default" : null,
++      queryParameterNames:Array.isArray(result?.queryParameterNames) ? result.queryParameterNames : [],
++      apiMessage:operation === "monitor-list" ? result?.apiMessage || null : null,
++      apiErrorType:operation === "monitor-list" ? result?.apiErrorType || null : null,
++      spamSignal:data?.spam === true,
++      feedbackRequiredSignal:data?.feedback_required === true,
++      restrictionSignal:result?.restrictionSignal || null,
++      cursorLength:typeof message.cursor === "string" ? message.cursor.length : 0,
++      nextCursorLength:data?.next_max_id == null ? 0 : String(data.next_max_id).length,
++      cursorEncodingVerified:result?.cursorEncodingVerified ?? null,
+       listKind:["followers","following"].includes(message.kind) ? message.kind : null,
+       visible:!document.hidden, identityPresent:!!cookie("ds_user_id"),
+       credentialPresent:!!cookie("csrftoken"), webClientAvailable:typeof siteModule("PolarisInstapi")?.apiGet === "function",
