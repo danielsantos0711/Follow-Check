@@ -38,7 +38,10 @@
 
   function parseJson(text) {
     if (!text || !/^[\s\r\n]*[\[{]/.test(text)) return null;
-    try { return JSON.parse(text); } catch { return null; }
+    // Opaque numeric cursors and IDs must not cross IEEE-754 as rounded numbers.
+    const lossless = text.replace(/"(next_max_id|next_cursor|next_max_id_str|pk|pk_id|id)"\s*:\s*([1-9]\d*|0)(?=\s*[,}\]])/g,
+      (match, key, value) => Number.isSafeInteger(Number(value)) ? match : `"${key}":${JSON.stringify(value)}`);
+    try { return JSON.parse(lossless); } catch { return null; }
   }
 
   function compactPayload(payload) {
@@ -53,6 +56,8 @@
       status: payload.status,
       message: payload.message,
       error_type: payload.error_type,
+      spam: payload.spam,
+      feedback_required: payload.feedback_required,
       friendship_status: payload.friendship_status,
     };
   }
@@ -80,7 +85,7 @@
       responseKind,
       responseBytes: new TextEncoder().encode(text).length,
       responseCategory: response.status === 429 ? "rate-limit-response" : /challenge_required|checkpoint_required/i.test(text) ? "challenge-marker" : /login_required/i.test(text) ? "login-marker" : data ? "json" : "unclassified",
-      schema: data && typeof data === "object" ? ["status","user","data","users","items","inbox","thread","message","error_type","next_max_id","has_more"].filter(key => Object.prototype.hasOwnProperty.call(data,key)) : [],
+      schema: data && typeof data === "object" ? ["status","user","data","users","items","inbox","thread","message","error_type","spam","feedback_required","next_max_id","has_more"].filter(key => Object.prototype.hasOwnProperty.call(data,key)) : [],
       data,
     };
   }
@@ -743,6 +748,27 @@
     };
   }
 
+  function safeListErrorText(value, limit = 200) {
+    if (typeof value !== "string") return "";
+    return value.replace(/https?:\/\/[^\s<>]+/gi,"[URL removido]")
+      .replace(/\bBearer\s+[A-Za-z0-9._~+\/=:-]+/gi,"Bearer [REMOVIDO]")
+      .replace(/\b(sessionid|csrftoken|rank_token|access_token|authorization|password|passwd|cookie|token)\b["']?\s*[:=]\s*["']?[^\s,;}&"']+/gi,"$1=[REMOVIDO]")
+      .replace(/\b[A-Za-z0-9_-]{48,}\b/g,"[REMOVIDO]")
+      .replace(/[\r\n\t]+/g," ").slice(0,limit);
+  }
+
+  function listErrorCode(result) {
+    const detail = `${result.data?.error_type || ""} ${result.data?.message || ""}`;
+    if (result.status === 429 || /rate.?limit/i.test(detail)) return "rate_limited";
+    if (/challenge_required|checkpoint_required/i.test(detail)) return "challenge_required";
+    if (result.data?.spam === true || result.data?.feedback_required === true) return "soft_throttle";
+    if (/feedback_required|please wait a few minutes|try again later/i.test(detail)) return "soft_throttle";
+    if (result.status === 401 || result.status === 403 || /login_required/i.test(detail)) return "page_main_rejected";
+    if (result.status === 400) return "list_request_rejected";
+    if (!result.ok || result.data?.status === "fail" || result.data?.error_type || !Array.isArray(result.data?.users)) return "list_response_invalid";
+    return "";
+  }
+
   async function executeMonitorList(message, signal) {
     const kind = String(message.kind || "");
     const userId = String(message.userId || "");
@@ -765,8 +791,16 @@
       };
     }
     const params = new URLSearchParams({ count: String(Math.max(12, Math.min(100, Number(message.count) || 100))), search_surface: "follow_list_page" });
+    // Use the web request format observed working in 2.5.7. The synthetic
+    // rank_token added in 2.5.8 is not part of this validated web contract.
     const cursor = String(message.cursor || "");
-    if (cursor && cursor.length <= 2048) params.set("max_id", cursor);
+    if (cursor.length > 2048 || (typeof message.cursor === "number" && !Number.isSafeInteger(message.cursor))) {
+      throw Object.assign(new Error('O cursor recebido não pode ser transmitido sem perda. A lista não foi repetida.'), {code:'pagination_cursor_invalid'});
+    }
+    if (cursor) params.set("max_id", cursor);
+    if (cursor && params.get("max_id") !== cursor) {
+      throw Object.assign(new Error('O cursor foi alterado durante a codificação.'), {code:'pagination_cursor_invalid'});
+    }
     const endpoint = `/api/v1/friendships/${userId}/${kind}/?${params}`;
     if ((document.hidden && globalThis.__FOLLOWCHECK_BACKGROUND_READ__ !== true) || /^\/(accounts|challenge|checkpoint|two_factor|oauth)(\/|$)/i.test(location.pathname)) {
       throw Object.assign(new Error('A sessão aguarda a app ativa e o fim da autenticação.'), {code:'ios_paused'});
@@ -784,12 +818,19 @@
     });
     const result = await readResponse(response, startedAt);
     const securityWarning = pageSessionState().securityWarning;
+    const code = listErrorCode(result);
     return {
       operation: "monitor-list",
       kind,
       executor: "page-main",
       ...result,
-      ok: !securityWarning && result.ok && Array.isArray(result.data?.users),
+      ok: !securityWarning && !code,
+      code,
+      queryParameterNames: [...params.keys()],
+      apiMessage: code ? safeListErrorText(result.data?.message) : "",
+      apiErrorType: code ? safeListErrorText(result.data?.error_type, 80) : "",
+      restrictionSignal: result.data?.spam === true ? "spam" : result.data?.feedback_required === true ? "feedback_required" : null,
+      cursorEncodingVerified: !cursor || params.get("max_id") === cursor,
       ...(securityWarning ? {
         code: "instagram_security_warning",
         message: "O Instagram apresentou um aviso de segurança. A leitura foi interrompida.",
@@ -818,6 +859,16 @@
       method:operation === "relationship" ? "mutation-and-verification" : ["ping","probe-session"].includes(operation) ? "local" : "GET",
       parameterNames:["userId","username","mediaId","kind","cursor","count"].filter(key => message[key] != null && message[key] !== ""),
       cursorPresent:!!message.cursor, requestedCount:Number(message.count)||null,
+      rankingPolicy:operation === "monitor-list" ? "web-default" : null,
+      queryParameterNames:Array.isArray(result?.queryParameterNames) ? result.queryParameterNames : [],
+      apiMessage:operation === "monitor-list" ? result?.apiMessage || null : null,
+      apiErrorType:operation === "monitor-list" ? result?.apiErrorType || null : null,
+      spamSignal:data?.spam === true,
+      feedbackRequiredSignal:data?.feedback_required === true,
+      restrictionSignal:result?.restrictionSignal || null,
+      cursorLength:typeof message.cursor === "string" ? message.cursor.length : 0,
+      nextCursorLength:data?.next_max_id == null ? 0 : String(data.next_max_id).length,
+      cursorEncodingVerified:result?.cursorEncodingVerified ?? null,
       listKind:["followers","following"].includes(message.kind) ? message.kind : null,
       visible:!document.hidden, identityPresent:!!cookie("ds_user_id"),
       credentialPresent:!!cookie("csrftoken"), webClientAvailable:typeof siteModule("PolarisInstapi")?.apiGet === "function",

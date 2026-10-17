@@ -1,0 +1,60 @@
+name: iOS
+
+on:
+  push:
+    branches: ['claude/**', main]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: scripts/validate-package.sh
+
+  app:
+    needs: engine
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          ls /Applications | grep -i xcode || true
+          xcodebuild -version
+          xcrun simctl list runtimes
+      - name: Native unit checks
+        run: python3 tests/native-2.5.9/native-relations.py
+      - name: Build for simulator (Debug)
+        run: |
+          xcodebuild -project FollowCheckIOS.xcodeproj -scheme FollowCheckIOS -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/sim \
+            CODE_SIGNING_ALLOWED=NO build | tee build/sim.log | grep -E "error:|warning:|BUILD" || true
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Capture screens
+        run: scripts/capture-screens.sh build/sim/Build/Products/Debug-iphonesimulator/FollowCheck.app screens
+      - name: Build unsigned IPA (Release)
+        run: scripts/build-unsigned-ipa.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens
+          path: screens
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FollowCheck-iOS-unsigned-ipa
+          path: FollowCheck-iOS-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: build/*.log
+          if-no-files-found: ignore

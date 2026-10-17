@@ -1,0 +1,5 @@
+build/
+*.ipa
+screens/
+.DS_Store
+xcuserdata/

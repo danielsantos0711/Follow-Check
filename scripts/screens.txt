@@ -1,0 +1,8 @@
+home --preview-home
+relations --preview-relations
+watchlist --preview-watchlist
+activity --preview-activity
+tools --preview-tools
+cleanup --preview-cleanup
+intelligence --preview-intelligence
+operations --preview-operations
