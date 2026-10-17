@@ -9,6 +9,9 @@ concurrency:
   group: ios-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   engine:
     runs-on: ubuntu-latest
@@ -34,6 +37,7 @@ jobs:
         run: python3 tests/native-2.5.9/native-relations.py
       - name: Build for simulator (Debug)
         run: |
+          mkdir -p build
           xcodebuild -project FollowCheckIOS.xcodeproj -scheme FollowCheckIOS -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/sim \
             CODE_SIGNING_ALLOWED=NO build | tee build/sim.log | grep -E "error:|warning:|BUILD" || true
@@ -42,19 +46,21 @@ jobs:
         run: scripts/capture-screens.sh build/sim/Build/Products/Debug-iphonesimulator/FollowCheck.app screens
       - name: Build unsigned IPA (Release)
         run: scripts/build-unsigned-ipa.sh
-      - uses: actions/upload-artifact@v4
+      - name: Publish screens and IPA to the ci-output branch
         if: always()
-        with:
-          name: screens
-          path: screens
-          if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
-        with:
-          name: FollowCheck-iOS-unsigned-ipa
-          path: FollowCheck-iOS-unsigned.ipa
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build-logs
-          path: build/*.log
-          if-no-files-found: ignore
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          out=$(mktemp -d)
+          mkdir -p "$out/screens"
+          for f in screens/*.png; do [ -f "$f" ] && sips -s format jpeg -s formatOptions 80 -Z 1400 "$f" --out "$out/screens/$(basename "${f%.png}").jpg" >/dev/null || true; done
+          [ -f FollowCheck-iOS-unsigned.ipa ] && cp FollowCheck-iOS-unsigned.ipa "$out/" || true
+          [ -f build/sim.log ] && grep -E "error:|warning:" build/sim.log | head -200 > "$out/build-diagnostics.txt" || true
+          printf 'commit %s\nbranch %s\nbuilt %s\n' "$SHA" "$REF" "$(date -u +%FT%TZ)" > "$out/BUILD.txt"
+          cd "$out"
+          git init -q -b ci-output
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -q -m "CI output for $SHA"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-output
