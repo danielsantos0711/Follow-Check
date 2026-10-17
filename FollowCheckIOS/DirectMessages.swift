@@ -56,6 +56,11 @@ final class DirectStore: NSObject, WKNavigationDelegate {
     var canSend = false
     var sending = false
     var failure: String?
+    var bulkRunning = false
+    var bulkDone = 0
+    var bulkTotal = 0
+    var bulkCurrent = ""
+    @ObservationIgnored var bulkStop = false
     @ObservationIgnored private var web: WKWebView?
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var startedAt = Date()
@@ -150,6 +155,59 @@ final class DirectStore: NSObject, WKNavigationDelegate {
         }
     }
 
+    /// Deletes conversations one at a time through the page's own delete flow,
+    /// with a pause between them. Stops at the first conversation it cannot delete.
+    func deleteChats(_ chats: [Chat]) async {
+        guard !bulkRunning, !chats.isEmpty else { return }
+        bulkRunning = true; bulkDone = 0; bulkTotal = chats.count; bulkStop = false; failure = nil
+        defer { bulkRunning = false; bulkCurrent = "" }
+        #if DEBUG
+        if model.isPreview {
+            for chat in chats { bulkCurrent = chat.name; try? await Task.sleep(for: .milliseconds(400)); threads.removeAll { $0.id == chat.id }; bulkDone += 1 }
+            return
+        }
+        #endif
+        guard let web, let inbox = URL(string: "https://www.instagram.com/direct/inbox/") else { return }
+        for chat in chats {
+            guard !bulkStop else { break }
+            bulkCurrent = chat.name
+            if await currentPage() != "inbox" {
+                web.load(URLRequest(url: inbox))
+                guard await waitForPage("inbox", seconds: 15) else { failure = "A caixa de entrada não voltou a abrir."; break }
+                try? await Task.sleep(for: .seconds(1.5))
+            }
+            let opened = (try? await web.callAsyncJavaScript("return globalThis.__FC_DIRECT__?.openByName(name) ?? false", arguments: ["name": chat.name], in: nil, contentWorld: .page)) as? Bool
+            guard opened == true, await waitForPage("thread", seconds: 12) else { failure = "Não encontrei a conversa com \(chat.name)."; break }
+            try? await Task.sleep(for: .seconds(1))
+            let result = (try? await web.callAsyncJavaScript("return await globalThis.__FC_DIRECT__?.deleteCurrent()", arguments: [:], in: nil, contentWorld: .page)) as? [String: Any]
+            guard result?["ok"] as? Bool == true else {
+                let code = result?["code"] as? String ?? "sem resposta"
+                failure = "Não consegui apagar a conversa com \(chat.name). O Instagram pode ter mudado o menu da conversa."
+                log("eliminação parou (\(code)).", level: "warn")
+                break
+            }
+            bulkDone += 1
+            threads.removeAll { $0.id == chat.id || $0.name == chat.name }
+            try? await Task.sleep(for: .seconds(Double.random(in: 2.5...4.5)))
+        }
+        if await currentPage() != "inbox" { web.load(URLRequest(url: inbox)) }
+        log("\(bulkDone) de \(bulkTotal) conversas apagadas.")
+    }
+
+    private func currentPage() async -> String {
+        guard let web else { return "" }
+        return ((try? await web.callAsyncJavaScript("return globalThis.__FC_DIRECT__?.snapshot().page ?? ''", arguments: [:], in: nil, contentWorld: .page)) as? String) ?? ""
+    }
+
+    private func waitForPage(_ page: String, seconds: Double) async -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            if await currentPage() == page { return true }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        return false
+    }
+
     private func poll() async {
         guard let web else { return }
         guard let value = try? await web.callAsyncJavaScript("return globalThis.__FC_DIRECT__?.snapshot() ?? null", arguments: [:], in: nil, contentWorld: .page),
@@ -233,6 +291,9 @@ struct MessagesScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var path: [String] = []
+    @State private var selecting = false
+    @State private var selected = Set<String>()
+    @State private var confirmDelete = false
     private var store: DirectStore { model.direct }
     private var visible: [DirectStore.Chat] {
         store.threads.filter { query.isEmpty || "\($0.name) \($0.snippet)".localizedCaseInsensitiveContains(query) }
@@ -245,8 +306,14 @@ struct MessagesScreen: View {
                     HStack {
                         Text("Mensagens").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.ink).accessibilityAddTraits(.isHeader)
                         Spacer()
+                        if store.phase == .ready && !store.threads.isEmpty {
+                            Button(selecting ? "OK" : "Selecionar") { selecting.toggle(); selected = [] }
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.signalInk).frame(minHeight: 44)
+                                .disabled(store.bulkRunning)
+                        }
                         IconButton(systemName: "xmark", label: "Fechar") { dismiss() }
                     }
+                    if store.bulkRunning || store.bulkDone > 0 && store.bulkDone < store.bulkTotal { bulkBanner }
                     content
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -255,6 +322,16 @@ struct MessagesScreen: View {
             .background(Theme.canvas)
             .refreshable { store.reload() }
             .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) { if selecting { selectionBar } }
+            .confirmationDialog("Apagar \(selected.count) \(selected.count == 1 ? "conversa" : "conversas")?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Apagar", role: .destructive) {
+                    let chats = store.threads.filter { selected.contains($0.id) }
+                    selecting = false; selected = []
+                    Task { await store.deleteChats(chats) }
+                }
+            } message: {
+                Text("São apagadas só para ti, uma de cada vez, como farias no Instagram. A outra pessoa continua a ver a conversa.")
+            }
             .navigationDestination(for: String.self) { id in
                 if let thread = store.threads.first(where: { $0.id == id }) { ChatScreen(model: model, thread: thread) }
             }
@@ -264,6 +341,7 @@ struct MessagesScreen: View {
             store.start()
             #if DEBUG
             if PreviewFlags.has("--preview-chat"), let first = store.threads.first { path = [first.id] }
+            if PreviewFlags.has("--preview-messages-select") { selecting = true; selected = Set(store.threads.prefix(2).map(\.id)) }
             #endif
         }
         .onDisappear { store.stop() }
@@ -296,8 +374,22 @@ struct MessagesScreen: View {
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(visible.enumerated()), id: \.element.id) { index, thread in
-                        NavigationLink(value: thread.id) { ThreadRow(thread: thread) }
+                        if selecting {
+                            Button {
+                                if selected.contains(thread.id) { selected.remove(thread.id) } else { selected.insert(thread.id) }
+                            } label: {
+                                HStack(spacing: 0) {
+                                    Image(systemName: selected.contains(thread.id) ? "checkmark.circle.fill" : "circle").font(.title3)
+                                        .foregroundStyle(selected.contains(thread.id) ? Theme.signalInk : Theme.ink3).padding(.leading, 14)
+                                    ThreadRow(thread: thread)
+                                }
+                            }
                             .buttonStyle(.plain)
+                            .accessibilityAddTraits(selected.contains(thread.id) ? .isSelected : [])
+                        } else {
+                            NavigationLink(value: thread.id) { ThreadRow(thread: thread) }
+                                .buttonStyle(.plain)
+                        }
                         if index < visible.count - 1 { Divider().overlay(Theme.line).padding(.leading, 76) }
                     }
                 }
@@ -306,6 +398,43 @@ struct MessagesScreen: View {
                     .font(.caption).foregroundStyle(Theme.ink3)
             }
         }
+    }
+}
+
+extension MessagesScreen {
+    fileprivate var bulkBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("A apagar conversas", systemImage: "trash").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                Spacer()
+                Text("\(store.bulkDone) de \(store.bulkTotal)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.signalInk)
+            }
+            ProgressTrack(value: Double(store.bulkDone) / Double(max(store.bulkTotal, 1)))
+            HStack {
+                Text(store.bulkCurrent.isEmpty ? " " : "A tratar: " + store.bulkCurrent).font(.footnote).foregroundStyle(Theme.ink2).lineLimit(1)
+                Spacer()
+                if store.bulkRunning { Button("Parar") { store.bulkStop = true }.font(.footnote.weight(.semibold)).foregroundStyle(Theme.loss) }
+            }
+            if let failure = store.failure, !store.bulkRunning { Text(failure).font(.footnote).foregroundStyle(Theme.loss) }
+        }
+        .surface(padding: 14, radius: 18, fill: Theme.signal.opacity(0.1))
+    }
+
+    fileprivate var selectionBar: some View {
+        HStack(spacing: 10) {
+            Button(selected.count == store.threads.count ? "Limpar" : "Todas") {
+                selected = selected.count == store.threads.count ? [] : Set(store.threads.map(\.id))
+            }
+            .buttonStyle(QuietButtonStyle())
+            Spacer()
+            Button(role: .destructive) { confirmDelete = true } label: {
+                Label("Apagar \(selected.count)", systemImage: "trash")
+            }
+            .buttonStyle(QuietButtonStyle(tint: Theme.loss))
+            .disabled(selected.isEmpty || store.bulkRunning)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+        .background(.bar)
     }
 }
 

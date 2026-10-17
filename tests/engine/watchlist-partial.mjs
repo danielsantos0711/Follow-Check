@@ -224,3 +224,17 @@ test('Ending the wait keeps a server deadline, stays blocked and rejects invalid
   assert.equal(state.cooldownUntil,until);assert.equal(state.blocked,true);
   await assert.rejects(e.ctx.__FOLLOWCHECK_IOS_CONTROL__('cooldown',{minutes:-1}),{code:'invalid_setting'});
 });
+
+test('A following-only target never requests the followers list and keeps its last followers reference',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
+  e.memory[key]={comparisonVersion:4,complete:true,viewerUserId:'42',target:{id:'99',username:'priscila',reportedFollowers:1171,reportedFollowing:343},
+    followers:users(Array.from({length:1171},(_,n)=>20000+n+1)),following:users(Array.from({length:343},(_,n)=>10000+n+1)),
+    listValidation:{followers:{mode:'count-matched',terminal:true,observed:1171,reported:1171},following:{mode:'count-matched',terminal:true,observed:343,reported:343}},
+    pendingRemovedFollowers:[],pendingStoppedFollowing:[],completedAt:1};
+  e.run('classifyWatchlistRemoved=async(removed,current,pending)=>({confirmed:[],unavailable:[],pending:removed})');
+  const result=await e.run('runNativeWatchlistScan({checkId:"device-check",accountId:"42",profileId:"watchlist:42",targetId:"target",lists:"following"})');
+  assert.equal(counts.followers,undefined,'no followers request');assert.equal(counts.following,14);
+  assert.equal(result.partialLists.followers.skipped,true);assert.deepEqual(plain(result.comparedLists),{followers:false,following:true});
+  assert.equal(e.memory[key].followers.length,1171,'the followers reference is untouched');
+  const safety=await e.run('readGlobalSafetyState()');assert.equal(safety.blocked,false);
+});

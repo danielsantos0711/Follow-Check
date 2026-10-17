@@ -13,11 +13,12 @@ const inboxLinks=`<main><header><h1>marta.lisboa</h1></header><div aria-label="L
  <a href="/direct/t/340282366841710300949128132115679124/">${row('<span>Studio Norte</span><br><span>Enviaste: obrigado · 1 h</span>')}</a>
 </div></main>
 <div role="dialog"><p>Ativar notificações?</p><button onclick="this.closest('[role=dialog]').remove()">Agora não</button></div>`;
-const inboxRows=`<main><div role="list">
+const notesTray=`<div style="display:flex;gap:8px;overflow-x:auto">${['Ana · 🎵 Flowers','Rita · Miley Cyrus','Tiago · a ouvir'].map(n=>`<div role="button" style="width:84px;flex:none"><img src="https://cdn.example/n.jpg" width="56" height="56"><div>${n.split(' · ')[0]}</div><div>${n.split(' · ')[1]}</div></div>`).join('')}</div>`;
+const inboxRows=`<main>${notesTray}<div role="list">
  ${row('<span>João Martins</span><br><span>Viste o filme? · 3 h</span>','role="button" onclick="history.pushState({},\'\',\'/direct/t/987/\');document.body.innerHTML=window.__thread"')}
  ${row('<span>Inês Costa</span><br><span>Gostou de uma mensagem · ontem</span>','role="button"')}
 </div></main><nav>${row('<span>Início</span><br><span>Explorar</span>','role="link"')}</nav>`;
-const thread=`<main style="display:flex;flex-direction:column;height:800px;width:390px"><header><span>Voltar</span><span>João Martins</span></header>
+const thread=`<main style="display:flex;flex-direction:column;height:800px;width:390px"><header><span>Voltar</span><span>João Martins</span><div role="button" onclick="document.body.insertAdjacentHTML('beforeend','<div role=&quot;button&quot; onclick=&quot;document.body.insertAdjacentHTML(\\'beforeend\\',\\'<div role=dialog><p>Eliminar conversa?</p><button onclick=window.deleted=true>Eliminar</button><button>Cancelar</button></div>\\')&quot;>Eliminar conversa</div>')"><svg aria-label="Informações da conversa" width="24" height="24"></svg></div></header>
  <div id="scroller" style="flex:1;overflow:auto"><div style="height:1200px;position:relative">
   <div style="display:flex;justify-content:flex-start;margin:8px"><div dir="auto" style="max-width:60%;background:#eee">Olá! Ainda vens?</div></div>
   <div style="display:flex;justify-content:flex-end;margin:8px"><div dir="auto" style="max-width:60%;background:#3797f0">Sim, claro. Que horas?</div></div>
@@ -53,5 +54,14 @@ assert.deepEqual(await page.evaluate(()=>__FC_DIRECT__.send('Até já!')),{ok:tr
 await page.waitForTimeout(300);
 assert.equal(await page.evaluate(()=>window.sent),'Até já!');
 assert.deepEqual(await page.evaluate(()=>__FC_DIRECT__.send('   ')),{ok:false,code:'empty'});
+// 4. Deleting the open conversation goes through details, delete and confirm
+assert.deepEqual(await page.evaluate(()=>__FC_DIRECT__.deleteCurrent()),{ok:true});
+assert.equal(await page.evaluate(()=>window.deleted),true);
+// 5. Rows without roles still read, and the notes tray never counts as a conversation
+const plainRows=`<main>${notesTray.replaceAll('role="button"','')}<div>${[['Marta','Até amanhã · 5 min'],['Pedro','Ok! · 1 d']].map(([n,t])=>`<div style="display:flex;gap:12px;padding:8px;height:72px"><img src="https://cdn.example/p.jpg" width="56" height="56"><div><span>${n}</span><br><span>${t}</span></div></div>`).join('')}</div></main>`;
+await load('/direct/inbox/',plainRows);
+snap=await page.evaluate(()=>__FC_DIRECT__.snapshot());
+assert.deepEqual(snap.threads.map(t=>[t.name,t.snippet,t.time]),[['Marta','Até amanhã','5 min'],['Pedro','Ok!','1 d']]);
+assert.equal(await page.evaluate(()=>__FC_DIRECT__.openByName('Pedro')),true);
 await browser.close();
-console.log('PASS direct reader: links and rows layouts, prompt dismissal, thread reading, bubble sides and sending');
+console.log('PASS direct reader: links, rows and plain layouts, notes tray excluded, prompt dismissal, thread reading, bubble sides, sending and deleting');

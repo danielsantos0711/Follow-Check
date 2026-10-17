@@ -2892,6 +2892,7 @@ async function applyQueuedNativeWatchlistMutation(ownerId, state, action, messag
       ...target,
       ...(typeof message.enabled === "boolean" ? { enabled: message.enabled } : {}),
       ...(typeof message.notificationsEnabled === "boolean" ? { notificationsEnabled: message.notificationsEnabled } : {}),
+      ...(["following", "both"].includes(message.lists) ? { lists: message.lists } : {}),
       ...(message.intervalMinutes == null ? {} : {
         intervalMinutes: Math.max(60, Math.min(43200, Number(message.intervalMinutes || 1440))),
       }),
@@ -2938,6 +2939,7 @@ function watchlistListProof(result,reported) {
   if (result.interrupted === true) {
     return {mode:"partial-observation",terminal:true,observed:Number(result.observed||0),reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0),interrupted:true};
   }
+  if (result.skipped === true) return {mode:"partial-observation",terminal:true,observed:0,reported,duplicates:0,receivedUsers:0,skipped:true};
   if (result.validationMode === "terminal-drift" && result.enumerationVerified === true && result.duplicates === 0 &&
       observed !== reported && Math.abs(observed - reported) <= watchlistDriftTolerance(reported)) {
     return {mode:"terminal-drift",terminal:true,observed,reported};
@@ -3157,6 +3159,7 @@ async function executeWatchlistTarget(ownerId, targetId) {
       targetFullName: target.fullName || "",
       targetProfilePicUrl: target.profilePicUrl || "",
       targetPrivateProfile: Boolean(target.privateProfile),
+      lists: target.lists === "following" ? "following" : "both",
       checkId: watchlistId(),
     });
     return await completeWatchlistTarget(ownerId, targetId, result);
@@ -3319,6 +3322,7 @@ async function handleWatchlistCommand(message = {}) {
     const target = {
       id: watchlistId(), userId: "", username, fullName: "", profilePicUrl: "", privateProfile: false,
       enabled: true, notificationsEnabled: message.notificationsEnabled !== false,
+      lists: message.lists === "following" ? "following" : "both",
       intervalMinutes: Math.max(60, Math.min(43200, Number(message.intervalMinutes || 1440))),
       nextRunAt: Date.now() + 1000, lastRunAt: 0, lastSuccessAt: 0, running: false,
       baselineReady: false, followers: 0, following: 0, lastChangeCount: 0, lastError: "", lastErrorCode: "",
@@ -3380,6 +3384,7 @@ async function handleWatchlistCommand(message = {}) {
       enabled,
       intervalMinutes,
       ...(typeof message.notificationsEnabled === "boolean" ? { notificationsEnabled: message.notificationsEnabled } : {}),
+      ...(["following", "both"].includes(message.lists) ? { lists: message.lists } : {}),
       nextRunAt: enabled ? Date.now() + intervalMinutes * 60_000 : 0,
     };
     return { ok: true, watchlist: await writeWatchlistState(ownerId, state) };
@@ -3596,7 +3601,11 @@ async function runNativeWatchlistScan(message = {}) {
       {expected:target.reportedFollowing,recheckExpected:recheckTargetCount("following"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true},
     );
     assertCollectedCoverage("following",followingResult);
-    if(activeMonitorPacing.pauseDurationMs>0) {
+    // Instagram restricts reading other accounts' followers far more than their
+    // following list (device diagnostics, builds 33-34). A target can follow only
+    // the accounts it follows; its followers keep their last reference untouched.
+    const followersWanted = message.lists !== "following";
+    if(followersWanted && activeMonitorPacing.pauseDurationMs>0) {
       postMonitorProgress(profileId,"Pausa entre listas","A aguardar antes de começar a lista de seguidores",46);
       await monitorSleep(activeMonitorPacing.pauseDurationMs);
     }
@@ -3604,7 +3613,9 @@ async function runNativeWatchlistScan(message = {}) {
     // When Instagram stops the second list, the first one is already proven:
     // keep it instead of discarding the whole check (device diagnostic, build 33).
     let followerResult, interruption = null;
-    try {
+    if (!followersWanted) {
+      followerResult = {users: [], terminal: true, skipped: true, validationMode: "skipped", observed: 0, duplicates: 0, receivedUsers: 0, pages: 0, transport: "none", expected: target.reportedFollowers};
+    } else try {
       followerResult = await monitorCollectList(
         "followers", target.id, profileId, 47, 90, String(viewerUserId),
         {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true},
@@ -3637,7 +3648,7 @@ async function runNativeWatchlistScan(message = {}) {
     const usable = watchlistReferenceLists(candidate,viewerUserId,target.id);
     const previous = usable ? candidate : null;
     await backgroundLog("info", "watchlist", "comparison-reference", "Referência de comparação avaliada.", {checkId, savedReferencePresent:!!candidate, referenceAccepted:!!previous, followersReference:!!usable?.followers, followingReference:!!usable?.following, partialFollowers:partial.followers, partialFollowing:partial.following, baselineOnly:!previous});
-    for (const kind of ['followers','following'].filter(kind=>partial[kind])) {
+    for (const kind of ['followers','following'].filter(kind=>partial[kind] && !listValidation[kind].skipped)) {
       await backgroundLog("warn","watchlist","list-partial",`${kind==='following'?'Contas seguidas':'Seguidores'}: ${listValidation[kind].observed} de ${listValidation[kind].reported} visíveis. O Instagram repetiu ${listValidation[kind].duplicates} perfis nesta lista; as saídas não foram calculadas.`,
         {checkId,list:kind,observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,referenceKept:!!usable?.[kind]});
     }
@@ -3704,7 +3715,7 @@ async function runNativeWatchlistScan(message = {}) {
       event: "watchlist_result",
       comparisonVerified: compare.followers || compare.following,
       coverageVerified: countVerified,
-      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,interrupted:listValidation[kind].interrupted===true} : null])),
+      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,interrupted:listValidation[kind].interrupted===true,skipped:listValidation[kind].skipped===true} : null])),
       interrupted: interruption ? String(interruption.code || "") : null,
       comparedLists: compare,
       enumerationVerified: true,

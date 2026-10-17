@@ -14,3 +14,4 @@ settings --preview-settings
 pace --preview-settings-pace
 messages --preview-messages
 chat --preview-chat
+messages-select --preview-messages --preview-messages-select

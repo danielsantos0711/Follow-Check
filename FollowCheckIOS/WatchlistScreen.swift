@@ -76,9 +76,10 @@ private struct WatchRunningCard: View {
 
 /// What we can honestly say about one list of a watched profile.
 enum ListHealth {
-    case pending, verified(Int), partial(observed: Int, reported: Int)
-    init(baselineReady: Bool, count: Int, partial: AppModel.PartialList?) {
-        if let partial { self = .partial(observed: partial.observed, reported: partial.reported) }
+    case pending, verified(Int), partial(observed: Int, reported: Int), off
+    init(baselineReady: Bool, count: Int, partial: AppModel.PartialList?, monitored: Bool = true) {
+        if !monitored || partial?.skipped == true { self = .off }
+        else if let partial { self = .partial(observed: partial.observed, reported: partial.reported) }
         else if baselineReady { self = .verified(count) }
         else { self = .pending }
     }
@@ -86,15 +87,16 @@ enum ListHealth {
 }
 
 extension AppModel.WatchTarget {
-    var followersHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: followers, partial: partialFollowers) }
+    var followersMonitored: Bool { lists != "following" }
+    var followersHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: followers, partial: partialFollowers, monitored: followersMonitored) }
     var followingHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: following, partial: partialFollowing) }
-    var hasPartialList: Bool { partialFollowers != nil || partialFollowing != nil }
+    var hasPartialList: Bool { (partialFollowers.map { !$0.skipped } ?? false) && followersMonitored || partialFollowing != nil }
     var statusLine: (String, Tone) {
         if running { return ("A verificar", .signal) }
         if !error.isEmpty { return ("Último check incompleto", .caution) }
         if !enabled { return ("Em pausa", .neutral) }
         if !baselineReady { return ("A criar referência", .reach) }
-        if partialFollowers != nil && partialFollowing != nil { return ("Listas parciais", .caution) }
+        if partialFollowers != nil && partialFollowing != nil && followersMonitored { return ("Listas parciais", .caution) }
         if hasPartialList { return ("Comparação parcial", .caution) }
         return ("A comparar", .gain)
     }
@@ -157,6 +159,9 @@ struct ListTile: View {
                     Text("/ \(reported.formatted())").font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(Theme.ink3)
                 }
                 Label("Parcial", systemImage: "circle.lefthalf.filled").font(.caption2.weight(.semibold)).foregroundStyle(Theme.caution)
+            case .off:
+                Text("—").font(.system(.title3, design: .rounded).weight(.semibold)).foregroundStyle(Theme.ink3)
+                Label("Não monitorizada", systemImage: "eye.slash").font(.caption2.weight(.semibold)).foregroundStyle(Theme.ink3)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -239,7 +244,7 @@ struct TargetDetail: View {
     }
 
     private func partialExplainer(_ target: AppModel.WatchTarget) -> some View {
-        let lists = [target.partialFollowers.map { ("seguidores", $0) }, target.partialFollowing.map { ("a seguir", $0) }].compactMap { $0 }
+        let lists = [target.partialFollowers.flatMap { $0.skipped ? nil : ("seguidores", $0) }, target.partialFollowing.map { ("a seguir", $0) }].compactMap { $0 }
         let names = lists.map { $0.0 }.joined(separator: " e ")
         let compared = [target.partialFollowers == nil ? "seguidores" : nil, target.partialFollowing == nil ? "a seguir" : nil].compactMap { $0 }
         let interrupted = lists.contains { $0.1.interrupted }
@@ -251,6 +256,12 @@ struct TargetDetail: View {
                 .font(.footnote).foregroundStyle(Theme.ink).fixedSize(horizontal: false, vertical: true)
             if !compared.isEmpty {
                 Text("A lista \(compared.joined(separator: " e ")) foi verificada e as mudanças dela são reais.").font(.footnote.weight(.medium)).foregroundStyle(Theme.signalInk)
+            }
+            if target.partialFollowers != nil && target.followersMonitored {
+                Text("O Instagram limita muito mais a leitura dos seguidores de outras contas do que a lista de quem elas seguem. Para checks fiáveis, monitoriza só quem esta conta segue.")
+                    .font(.footnote).foregroundStyle(Theme.ink2).fixedSize(horizontal: false, vertical: true)
+                Button("Monitorizar só quem segue") { model.watchlist("update", args: ["targetId": target.id, "lists": "following"]) }
+                    .buttonStyle(QuietButtonStyle(fill: true))
             }
         }
         .padding(14)
@@ -299,6 +310,15 @@ struct TargetDetail: View {
             } label: {
                 row("clock", "Intervalo mínimo", value: RelativeTime.interval(target.intervalMinutes))
             }
+            Divider().overlay(Theme.line).padding(.leading, 50)
+            Toggle(isOn: Binding(get: { target.followersMonitored }, set: { model.watchlist("update", args: ["targetId": target.id, "lists": $0 ? "both" : "following"]) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 12) { Image(systemName: "person.2").frame(width: 24); Text("Monitorizar também seguidores") }
+                        .font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
+                    Text("Mais pedidos; o Instagram limita esta lista com frequência.").font(.caption).foregroundStyle(Theme.ink2).padding(.leading, 36)
+                }
+            }
+            .tint(Theme.signalInk).padding(.horizontal, 14).padding(.vertical, 10)
             Divider().overlay(Theme.line).padding(.leading, 50)
             Button { model.watchlist("update", args: ["targetId": target.id, "enabled": !target.enabled]) } label: {
                 row(target.enabled ? "pause.circle" : "play.circle", target.enabled ? "Pausar checks automáticos" : "Retomar checks automáticos")
@@ -399,6 +419,7 @@ private struct AddTargetSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var username = ""
     @State private var interval = 1440
+    @State private var followers = false
     @FocusState private var focused: Bool
     private var clean: String { username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "").lowercased() }
     private var valid: Bool { clean.range(of: "^[a-z0-9._]{1,30}$", options: .regularExpression) != nil }
@@ -432,6 +453,13 @@ private struct AddTargetSheet: View {
                     .pickerStyle(.segmented)
                     Text("Intervalos longos são mais seguros: cada check lê listas inteiras.").font(.caption).foregroundStyle(Theme.ink2)
                 }
+                Toggle(isOn: $followers) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Monitorizar também seguidores").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        Text("Por omissão só quem esta conta segue: é a lista que o Instagram deixa ler sem bloquear.").font(.caption).foregroundStyle(Theme.ink2)
+                    }
+                }
+                .tint(Theme.signalInk)
                 Spacer()
                 Button("Adicionar", action: add).buttonStyle(SignalButtonStyle()).disabled(!valid || duplicate || model.watchlistBusy)
             }
@@ -442,12 +470,12 @@ private struct AddTargetSheet: View {
             .onAppear { focused = true }
         }
         .tint(Theme.signalInk)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private func add() {
         guard valid, !duplicate else { return }
-        model.watchlist("add", args: ["username": clean, "intervalMinutes": interval])
+        model.watchlist("add", args: ["username": clean, "intervalMinutes": interval, "lists": followers ? "both" : "following"])
         dismiss()
     }
 }

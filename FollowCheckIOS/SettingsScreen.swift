@@ -86,7 +86,12 @@ struct SettingsScreen: View {
                 group("Ajuda") {
                     NavigationLink(value: "diagnostics") { SettingsRow(icon: "stethoscope", title: "Diagnóstico") }
                     divider
-                    ShareLink(item: model.diagnosticReport) { SettingsRow(icon: "square.and.arrow.up", title: "Enviar diagnóstico") }
+                    Button {
+                        UIPasteboard.general.string = model.problemsReport
+                        model.notice = "Erros e avisos copiados (\(model.events.filter { ["warn", "error"].contains($0.level) }.count))."
+                    } label: { SettingsRow(icon: "doc.on.doc", title: "Copiar só erros e avisos") }
+                    divider
+                    ShareLink(item: model.diagnosticReport) { SettingsRow(icon: "square.and.arrow.up", title: "Enviar diagnóstico completo") }
                     divider
                     SettingsRow(icon: "info.circle", title: "Versão", value: version)
                 }
@@ -393,7 +398,9 @@ private struct DiagnosticScreen: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    ShareLink(item: model.diagnosticReport) { Label("Enviar", systemImage: "square.and.arrow.up") }
+                    Button("Copiar só erros e avisos", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.problemsReport }
+                    ShareLink(item: model.problemsReport) { Label("Enviar só erros e avisos", systemImage: "exclamationmark.triangle") }
+                    ShareLink(item: model.diagnosticReport) { Label("Enviar tudo", systemImage: "square.and.arrow.up") }
                     Button("Limpar eventos", systemImage: "trash", role: .destructive) { clearing = true }
                 } label: { Image(systemName: "ellipsis.circle") }
             }

@@ -41,11 +41,14 @@ final class AppModel {
         let reported: Int
         /// Instagram stopped the list with a limit; otherwise the list was shuffled.
         let interrupted: Bool
+        /// The user chose not to read this list for the target.
+        let skipped: Bool
         init?(_ value: Any?) {
             guard let value = value as? [String: Any], let observed = (value["observed"] as? NSNumber)?.intValue,
                   let reported = (value["reported"] as? NSNumber)?.intValue else { return nil }
             self.observed = observed; self.reported = reported
             interrupted = value["interrupted"] as? Bool ?? false
+            skipped = value["skipped"] as? Bool ?? false
         }
     }
     struct WatchTarget: Identifiable {
@@ -64,6 +67,8 @@ final class AppModel {
         let partialFollowers: PartialList?
         let partialFollowing: PartialList?
         let intervalMinutes: Int
+        /// "following" or "both".
+        let lists: String
         let lastSuccess: Date?
         let nextRun: Date?
         let error: String
@@ -85,6 +90,7 @@ final class AppModel {
             reportedFollowers = (v["reportedFollowers"] as? NSNumber)?.intValue
             reportedFollowing = (v["reportedFollowing"] as? NSNumber)?.intValue
             intervalMinutes = (v["intervalMinutes"] as? NSNumber)?.intValue ?? 1440
+            lists = v["lists"] as? String == "following" ? "following" : "both"
             let ms = (v["lastSuccessAt"] as? NSNumber)?.doubleValue ?? 0
             lastSuccess = ms > 0 ? Date(timeIntervalSince1970: ms / 1000) : nil
             let next = (v["nextRunAt"] as? NSNumber)?.doubleValue ?? 0
@@ -325,14 +331,18 @@ final class AppModel {
         if value is NSNumber || value is NSNull { return value }
         return "[tipo omitido]"
     }
-    var diagnosticReport: String {
+    var diagnosticReport: String { report(onlyProblems: false) }
+    /// Only warnings and errors, each with its technical details: short enough to paste.
+    var problemsReport: String { report(onlyProblems: true) }
+    private func report(onlyProblems: Bool) -> String {
+        let selected = onlyProblems ? events.filter { ["warn", "error"].contains($0.level) } : events
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
         let refreshed = diagnosticsRefreshedAt.map { iso.string(from: $0) } ?? "não atualizado nesta abertura"
-        let header = "FollowCheck iOS \(version) (build \(build))\nDiagnóstico v2 | UTC | gerado: \(iso.string(from: Date()))\nSistema: \(ProcessInfo.processInfo.operatingSystemVersionString)\nÚltima atualização do motor: \(refreshed)\nEventos: \(events.count) / 1000; histórico limitado. Sem corpos de resposta nem credenciais.\n"
-        return header + events.map { event in
+        let header = "FollowCheck iOS \(version) (build \(build))\nDiagnóstico v2 | UTC | gerado: \(iso.string(from: Date()))\nSistema: \(ProcessInfo.processInfo.operatingSystemVersionString)\nÚltima atualização do motor: \(refreshed)\nEventos: \(onlyProblems ? "\(selected.count) avisos e erros de \(events.count)" : "\(events.count) / 1000; histórico limitado"). Sem corpos de resposta nem credenciais.\n"
+        return header + selected.map { event in
             "\(iso.string(from: event.date)) | \(event.level) | \(event.message)" + (event.details.map { "\n  " + $0 } ?? "")
         }.joined(separator: "\n")
     }

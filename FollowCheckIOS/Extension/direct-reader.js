@@ -69,16 +69,32 @@
       if (row) out.push({ ...row, strategy: "link" });
     }
     if (out.length) return out;
-    const candidates = [...document.querySelectorAll('[role="listitem"], [role="button"], [role="link"]')]
-      .filter((element) => visible(element) && element.querySelector("img") && lines(element).length >= 2 && lines(element).length <= 6)
-      .filter((element) => !element.closest("nav") && !element.closest('[role="dialog"]'));
-    // Keep the outermost row only.
-    const rows = candidates.filter((element) => !candidates.some((other) => other !== element && other.contains(element)));
-    rows.forEach((element, index) => {
+    rowElements().forEach((element, index) => {
       const row = rowFrom(element, "row:" + index, index);
       if (row) out.push({ ...row, strategy: "row" });
     });
     return out;
+  }
+
+  // Conversation rows span the width of the list. The notes and music tray at the
+  // top of the inbox (avatar + short text, side by side) is excluded by its width.
+  function rowElements() {
+    const width = Math.max(1, document.documentElement.clientWidth || window.innerWidth || 1);
+    const candidates = [...document.querySelectorAll('[role="listitem"], [role="button"], [role="link"]')]
+      .filter((element) => visible(element) && element.querySelector("img") && lines(element).length >= 2 && lines(element).length <= 6)
+      .filter((element) => element.getBoundingClientRect().width >= width * 0.6)
+      .filter((element) => !element.closest("nav") && !element.closest('[role="dialog"]') && !element.closest("header"));
+    const outermost = (list) => list.filter((element) => !list.some((other) => other !== element && other.contains(element)));
+    if (candidates.length) return outermost(candidates);
+    // Rows without any role: full-width blocks of the list with a picture and a name.
+    const plain = [...(document.querySelector("main") || document.body).querySelectorAll("div")]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width >= width * 0.6 && rect.height >= 48 && rect.height <= 120 && visible(element) &&
+          element.querySelector("img") && lines(element).length >= 2 && lines(element).length <= 4 && !element.closest("header");
+      });
+    // The innermost block holding one picture is the row; its parents hold several.
+    return plain.filter((element) => element.querySelectorAll("img").length <= 2 && !plain.some((other) => other !== element && element.contains(other)));
   }
 
   function composer() {
@@ -180,16 +196,48 @@
         location.assign("/direct/t/" + encodeURIComponent(id) + "/");
         return true;
       }
-      const row = threads()[Number(index)];
-      if (!row) return false;
-      const candidates = [...document.querySelectorAll('[role="listitem"], [role="button"], [role="link"]')]
-        .filter((element) => visible(element) && element.querySelector("img") && lines(element).length >= 2 && lines(element).length <= 6)
-        .filter((element) => !element.closest("nav") && !element.closest('[role="dialog"]'));
-      const rows = candidates.filter((element) => !candidates.some((other) => other !== element && other.contains(element)));
-      const target = rows[Number(index)];
+      const target = rowElements()[Number(index)];
       if (!target) return false;
       target.click();
       return true;
+    },
+    // Opens a conversation by the name shown in the list (positions move after a deletion).
+    openByName(name) {
+      const wanted = clean(name);
+      const link = [...document.querySelectorAll('a[href*="/direct/t/"]')].find((a) => lines(a)[0] === wanted);
+      if (link) { link.click(); return true; }
+      const row = rowElements().find((element) => lines(element)[0] === wanted);
+      if (!row) return false;
+      row.click();
+      return true;
+    },
+    // Deletes the open conversation for this account only, through the page's own
+    // "conversation details > delete chat > confirm" flow. Each step waits for the page.
+    async deleteCurrent() {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const text = (element) => [clean(element.getAttribute("aria-label")), clean(element.innerText),
+        ...[...element.querySelectorAll("svg[aria-label], [aria-label]")].map((node) => clean(node.getAttribute("aria-label")))].join(" ");
+      async function find(match, timeout = 6000) {
+        const end = Date.now() + timeout;
+        while (Date.now() < end) {
+          const found = [...document.querySelectorAll('[role="button"], button, a[role="link"], div[tabindex="0"]')].find((element) => visible(element) && match(element));
+          if (found) return found;
+          await wait(250);
+        }
+        return null;
+      }
+      if (page() !== "thread") return { ok: false, code: "not_in_conversation" };
+      const info = await find((element) => /informa[çc][õo]es da conversa|detalhes da conversa|conversation information|conversation details|thread details/i.test(text(element)));
+      if (!info) return { ok: false, code: "details_missing" };
+      info.click();
+      const remove = await find((element) => /^(eliminar conversa|apagar conversa|eliminar chat|apagar chat|delete chat|delete conversation)$/i.test(clean(element.innerText)));
+      if (!remove) return { ok: false, code: "delete_missing" };
+      remove.click();
+      const confirm = await find((element) => !!element.closest('[role="dialog"]') && /^(eliminar|apagar|delete)$/i.test(clean(element.innerText)));
+      if (!confirm) return { ok: false, code: "confirm_missing" };
+      confirm.click();
+      await wait(1500);
+      return { ok: true };
     },
     scrollUp() {
       const root = conversationRoot();
