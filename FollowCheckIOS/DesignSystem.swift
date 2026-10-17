@@ -488,15 +488,20 @@ struct ReciprocityRing<Center: View>: View {
 
 // MARK: - Brand mark
 
-/// An open ring closed by a single signal arc: the circle, checked.
+/// Two overlapping circles, you and them; the shared lens (mutual) carries the signal colour.
+/// Matches the app icon.
 struct BrandMark: View {
     var size: CGFloat = 28
     var body: some View {
+        let diameter = size * 0.62
+        let offset = size * 0.17
+        let line = max(1.5, size * 0.085)
         ZStack {
-            Circle().trim(from: 0.08, to: 0.78).stroke(Theme.ink, style: StrokeStyle(lineWidth: size * 0.16, lineCap: .round))
-            Circle().trim(from: 0.86, to: 0.98).stroke(Theme.signalInk, style: StrokeStyle(lineWidth: size * 0.16, lineCap: .round))
+            Circle().fill(Theme.signal).frame(width: diameter, height: diameter).offset(x: -offset)
+                .mask(Circle().frame(width: diameter, height: diameter).offset(x: offset))
+            Circle().stroke(Theme.ink, lineWidth: line).frame(width: diameter, height: diameter).offset(x: -offset)
+            Circle().stroke(Theme.ink, lineWidth: line).frame(width: diameter, height: diameter).offset(x: offset)
         }
-        .rotationEffect(.degrees(-90))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
@@ -540,4 +545,13 @@ enum RelativeTime {
         default: return minutes % 1440 == 0 ? "\(minutes / 1440) dias" : "\(minutes / 60) h"
         }
     }
+}
+
+extension ISO8601DateFormatter {
+    /// Shared parser for the engine's timestamps with fractional seconds.
+    static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 }

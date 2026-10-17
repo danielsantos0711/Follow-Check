@@ -965,7 +965,7 @@ private struct ProfileNotes: View {
                 Section("Perfil"){Text("@\(person.username)");Text(person.name);Toggle("Adicionar ao radar de concorrentes",isOn:$watched)}
                 Section("Etiquetas, separadas por vírgula"){TextField("VIP, Amigos, Cliente…",text:$tags)}
                 Section("Notas"){TextEditor(text:$notes).frame(minHeight:130)}
-            }.navigationTitle("Perfil")
+            }.fcForm().navigationTitle("Perfil")
             .toolbar { ToolbarItem(placement:.confirmationAction){Button("Guardar"){Task{var data=store.metadata;var meta=data[person.id] ?? [:];meta["notes"]=notes;meta["tags"]=tags.split(separator:",").map{$0.trimmingCharacters(in:.whitespaces)};meta["watchlist"]=watched;data[person.id]=meta;await store.save("profile-meta",data);if store.error == nil {dismiss()}}}.disabled(store.busy)} }
             .onAppear{let meta=store.metadata[person.id] ?? [:];notes=meta["notes"] as? String ?? "";tags=(meta["tags"] as? [String] ?? []).joined(separator:", ");watched=meta["watchlist"] as? Bool ?? false}
         }.tint(Theme.signalInk)
@@ -981,25 +981,57 @@ private struct ReportsStudio: View {
     }
     var body: some View {
         ScrollView { VStack(alignment:.leading,spacing:20){
-            Text("Os teus dados. Prontos a usar.").font(.title.bold())
-            Text("Exporta o último resultado completo, incluindo as proteções que definiste.").foregroundStyle(.secondary)
-            LabeledContent("Perfis",value:model.relations.count.formatted()).fcCard()
-            LabeledContent("Protegidos",value:model.tools.protectedIDs.count.formatted()).fcCard()
-            LabeledContent("Mútuos",value:model.relations.filter{$0.follows && $0.following}.count.formatted()).fcCard()
-            LabeledContent("Não me seguem",value:model.relations.filter{$0.following && !$0.follows}.count.formatted()).fcCard()
-            LabeledContent("Eu não sigo",value:model.relations.filter{$0.follows && !$0.following}.count.formatted()).fcCard()
-            Text("Análises guardadas").font(.headline)
-            ForEach(model.tools.records("snapshots").reversed().map{StudioRecord(value:$0)}){item in
-                VStack(alignment:.leading,spacing:8){
-                    Text("\(item.value["total"] as? Int ?? 0) contas · \(item.value["reciprocity"] as? Int ?? 0)% reciprocidade").font(.headline)
-                    Text(item.value["timestamp"] as? String ?? "").font(.caption).foregroundStyle(.secondary)
-                    Text("\(item.value["mutual"] as? Int ?? 0) mútuos · \(item.value["nonFollowers"] as? Int ?? 0) sem reciprocidade").font(.caption)
-                }.fcCard()
+            VStack(alignment:.leading,spacing:4) {
+                Text("Os teus dados, prontos a usar").font(.title2.weight(.bold)).foregroundStyle(Theme.ink)
+                Text("Exporta o último resultado completo, com as proteções e notas que definiste.").font(.footnote).foregroundStyle(Theme.ink2)
             }
-            ShareLink("Exportar CSV",item:model.tools.csv).buttonStyle(ProminentButtonStyle()).disabled(!model.relationsReady)
-            ShareLink("Exportar JSON",item:json).buttonStyle(QuietButtonStyle()).disabled(!model.relationsReady)
-            ShareLink("Exportar diagnóstico",item:model.diagnosticReport).buttonStyle(QuietButtonStyle())
+            LazyVGrid(columns:[GridItem(.flexible(),spacing:10),GridItem(.flexible(),spacing:10)],spacing:10) {
+                stat("Perfis",model.relations.count)
+                stat("Mútuos",model.relations.filter{$0.follows && $0.following}.count)
+                stat("Não te seguem",model.relations.filter{$0.following && !$0.follows}.count)
+                stat("Não segues",model.relations.filter{$0.follows && !$0.following}.count)
+                stat("Protegidos",model.tools.protectedIDs.count)
+                stat("Análises",model.tools.records("snapshots").count)
+            }
+            VStack(spacing:10) {
+                ShareLink(item:model.tools.csv,preview:SharePreview("FollowCheck · audiência.csv")) {Label("Exportar CSV",systemImage:"tablecells")}
+                    .buttonStyle(SignalButtonStyle()).disabled(!model.relationsReady)
+                HStack(spacing:10) {
+                    ShareLink(item:json,preview:SharePreview("FollowCheck · audiência.json")) {Label("JSON",systemImage:"curlybraces")}
+                        .buttonStyle(QuietButtonStyle(fill:true)).disabled(!model.relationsReady)
+                    ShareLink(item:model.diagnosticReport,preview:SharePreview("FollowCheck · diagnóstico")) {Label("Diagnóstico",systemImage:"stethoscope")}
+                        .buttonStyle(QuietButtonStyle(fill:true))
+                }
+                if !model.relationsReady {Text("Faz um check completo para exportar a audiência.").font(.footnote).foregroundStyle(Theme.ink3)}
+            }
+            let snapshots=model.tools.records("snapshots").reversed().map{StudioRecord(value:$0)}
+            if !snapshots.isEmpty {
+                SectionHeader(title:"Análises guardadas")
+                VStack(spacing:0) {
+                    ForEach(snapshots){item in
+                        HStack {
+                            VStack(alignment:.leading,spacing:3){
+                                Text("\(item.value["total"] as? Int ?? 0) contas · \(item.value["reciprocity"] as? Int ?? 0)% reciprocidade").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                                Text("\(item.value["mutual"] as? Int ?? 0) mútuos · \(item.value["nonFollowers"] as? Int ?? 0) sem reciprocidade").font(.footnote).foregroundStyle(Theme.ink2)
+                            }
+                            Spacer()
+                            Text(Self.day(item.value["timestamp"] as? String ?? "")).font(.caption).foregroundStyle(Theme.ink3)
+                        }.padding(.horizontal,14).padding(.vertical,11)
+                        Divider().overlay(Theme.line).padding(.leading,14)
+                    }
+                }.surface(padding:0)
+            }
         }.padding(20)}.task{model.loadRelations()}
+    }
+    private func stat(_ title:String,_ value:Int)->some View {
+        VStack(alignment:.leading,spacing:2) {
+            Text(value.formatted()).font(.system(.title3,design:.rounded).weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
+            Text(title).font(.caption).foregroundStyle(Theme.ink2)
+        }.frame(maxWidth:.infinity,alignment:.leading).surface(padding:12,radius:14)
+    }
+    private static func day(_ raw:String)->String {
+        guard let date=ISO8601DateFormatter.fractional.date(from:raw) ?? ISO8601DateFormatter().date(from:raw) else{return raw}
+        return date.formatted(date:.abbreviated,time:.shortened)
     }
 }
 
@@ -1146,7 +1178,7 @@ private struct LocalEditor: View {
                 }
                 if key == "collections" {Section("Perfis — um username por linha"){TextEditor(text:$usernames).frame(minHeight:140).textInputAutocapitalization(.never)}}
                 else {Section("Calendário editorial"){Toggle("Adicionar ao calendário",isOn:$planned);if planned {DatePicker("Data",selection:$date)}};Section{Text("Este é um rascunho local. Para publicar ou agendar no Instagram, usa Publicar conteúdo e confirma a operação na integração.").font(.footnote).foregroundStyle(.secondary)}}
-            }.navigationTitle(key == "collections" ? "Coleção":"Conteúdo")
+            }.fcForm().navigationTitle(key == "collections" ? "Coleção":"Conteúdo")
             .toolbar {
                 ToolbarItem(placement:.cancellationAction){Button("Cancelar"){dismiss()}}
                 ToolbarItem(placement:.confirmationAction){Button("Guardar"){Task{var value=item.value;value["title"]=title;value["content"]=content;value["status"]=status;value["mediaURLs"]=mediaURLs.split(whereSeparator: \.isNewline).map(String.init);value["updatedAt"]=ISO8601DateFormatter().string(from:Date());if planned{value["scheduledFor"]=ISO8601DateFormatter().string(from:date)}else{value.removeValue(forKey:"scheduledFor")};if key == "collections" {value["usernames"]=usernames.split(whereSeparator:{$0.isWhitespace||$0==","}).map(String.init)};var values=store.records(key);if let index=values.firstIndex(where:{StudioRecord(value:$0).id==item.id}){values[index]=value}else{values.insert(value,at:0)};await store.save(key,values);if store.error == nil{dismiss()}}}.disabled(title.trimmingCharacters(in:.whitespaces).isEmpty||store.busy)}
@@ -1307,7 +1339,7 @@ private struct IntegrationSettings: View {
                     }
                 }
                 if store.config["configured"] as? Bool == true {Section{Button("Desligar integração",role:.destructive){disconnect=true}}}
-            }.navigationTitle("Integração")
+            }.fcForm().navigationTitle("Integração")
             .toolbar{ToolbarItem(placement:.confirmationAction){Button("Fechar"){dismiss()}}}
             .task{if store.config["configured"] as? Bool == true{await connect()}}
             .confirmationDialog("Remover a chave guardada neste dispositivo?",isPresented:$disconnect,titleVisibility:.visible){Button("Desligar",role:.destructive){Task{do{store.config=(try await store.request("integration",["operation":"disconnect"]))["config"] as? [String:Any] ?? [:];dismiss()}catch{message=error.localizedDescription}}}}
@@ -1368,7 +1400,7 @@ private struct ProfessionalComposer: View {
                 }
                 if let message{Section{Text(message).foregroundStyle(Theme.caution)}}
                 Section{Button(mode == "automations" ? "Rever automação":"Rever publicação"){confirm=true}.disabled(busy||title.isEmpty||account.isEmpty||(mode == "automations" ? keywords.isEmpty||content.isEmpty:urls.isEmpty && files.isEmpty));if busy{ProgressView()}}
-            }.navigationTitle(mode == "automations" ? "Nova automação":"Publicar conteúdo")
+            }.fcForm().navigationTitle(mode == "automations" ? "Nova automação":"Publicar conteúdo")
             .toolbar{ToolbarItem(placement:.cancellationAction){Button("Fechar"){dismiss()}.disabled(busy)}}
             .onAppear{
                 if video{format="reels"}

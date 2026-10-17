@@ -11,29 +11,48 @@ struct NativeQueueView:View {
     private var pending:[AppModel.Relation] {rows.filter{$0["status"] as? String=="pending"}.map(AppModel.Relation.init)}
     var body:some View {
         ScrollView {LazyVStack(alignment:.leading,spacing:16){
-            Text("Centro de operações").font(.largeTitle.bold())
-            Text("Cada perfil tem um estado. Ações sem confirmação não são repetidas automaticamente.").foregroundStyle(.secondary)
+            VStack(alignment:.leading,spacing:4) {
+                Text("Centro de operações").font(.title2.weight(.bold)).foregroundStyle(Theme.ink)
+                Text("Cada perfil tem um estado. Ações sem confirmação não são repetidas automaticamente.").font(.footnote).foregroundStyle(Theme.ink2)
+            }
             if store.operationRunning {
-                ProgressView(value:Double(store.operationDone),total:Double(max(store.operationTotal,1)))
-                Text("\(store.operationDone) / \(store.operationTotal) · @\(store.operationCurrent)").font(.headline)
-                if let until=store.queueWaitUntil {
-                    HStack{Text("Próxima ação");Spacer();Text(until,style:.relative).monospacedDigit()}
-                }
-                Button("Parar após a operação atual",role:.destructive){store.operationPaused=true}
+                VStack(alignment:.leading,spacing:10) {
+                    HStack {
+                        Text("\(store.operationDone) de \(store.operationTotal)").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
+                        Spacer()
+                        Text("@"+store.operationCurrent).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ink2)
+                    }
+                    ProgressView(value:Double(store.operationDone),total:Double(max(store.operationTotal,1))).tint(Theme.signalInk)
+                    if let until=store.queueWaitUntil {
+                        HStack{Text("Próxima ação").foregroundStyle(Theme.ink2);Spacer();Text(until,style:.relative).monospacedDigit()}.font(.footnote)
+                    }
+                    Button("Parar após a operação atual",role:.destructive){store.operationPaused=true}.buttonStyle(QuietButtonStyle())
+                }.surface(fill:Theme.signal.opacity(0.08))
             }else if !pending.isEmpty {
-                Button("Rever \(pending.count) perfis ainda não iniciados"){review=true}.buttonStyle(ProminentButtonStyle())
+                Button("Rever \(pending.count) perfis ainda não iniciados"){review=true}.buttonStyle(SignalButtonStyle())
             }
-            ForEach(rows.compactMap{row -> QueueRecord? in guard let id=row["id"] as? String else{return nil};return QueueRecord(id:id,value:row)}){item in
-                let status=item.value["status"] as? String ?? "pending"
-                HStack {
-                    ProfileAvatar(photoURL:item.value["photoURL"] as? String ?? "",size:40)
-                    VStack(alignment:.leading,spacing:5){Text("@"+(item.value["username"] as? String ?? ""));Text(Self.labels[status] ?? status).font(.caption).foregroundStyle(status=="confirmed" ? FCStyle.mint:status=="unconfirmed" ? Theme.caution:.secondary);if let message=item.value["message"] as? String{Text(message).font(.caption2).foregroundStyle(.secondary)}}
-                    Spacer()
-                    Image(systemName:status=="confirmed" ? "checkmark.circle.fill":status=="unconfirmed" ? "exclamationmark.triangle":"clock")
-                }.fcCard()
+            if rows.isEmpty {
+                EmptyState(icon:"list.bullet.rectangle",title:"Ainda sem operações",message:"Prepara uma seleção em Pessoas, Limpeza ou Coleções.").surface(padding:0)
+            } else {
+                VStack(spacing:0) {
+                    ForEach(rows.compactMap{row -> QueueRecord? in guard let id=row["id"] as? String else{return nil};return QueueRecord(id:id,value:row)}){item in
+                        let status=item.value["status"] as? String ?? "pending"
+                        HStack(spacing:12) {
+                            ProfileAvatar(photoURL:item.value["photoURL"] as? String ?? "",size:40,name:item.value["username"] as? String ?? "")
+                            VStack(alignment:.leading,spacing:3){
+                                Text("@"+(item.value["username"] as? String ?? "")).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                                Text(Self.labels[status] ?? status).font(.footnote).foregroundStyle(status=="confirmed" ? Theme.signalInk:status=="unconfirmed" ? Theme.caution:Theme.ink2)
+                                if let message=item.value["message"] as? String{Text(message).font(.caption).foregroundStyle(Theme.ink2)}
+                            }
+                            Spacer()
+                            Image(systemName:status=="confirmed" ? "checkmark.circle.fill":status=="unconfirmed" ? "exclamationmark.triangle.fill":status=="running" ? "arrow.triangle.2.circlepath":"clock")
+                                .foregroundStyle(status=="confirmed" ? Theme.signalInk:status=="unconfirmed" ? Theme.caution:Theme.ink3)
+                        }.padding(.horizontal,14).padding(.vertical,10)
+                        Divider().overlay(Theme.line).padding(.leading,66)
+                    }
+                }.surface(padding:0)
             }
-            if rows.isEmpty {ContentUnavailableView("Ainda sem operações",systemImage:"list.bullet.rectangle",description:Text("Prepara uma seleção nas Relações, Cleanup ou Coleções."))}
-        }.padding(20)}.background(FCStyle.background).task{await store.load()}
+        }.padding(20)}.background(Theme.canvas).task{await store.load()}
             .sheet(isPresented:$review){NativeActionReview(model:model,people:pending,action:action)}
     }
     private struct QueueRecord:Identifiable {let id:String;let value:[String:Any]}
@@ -144,53 +163,68 @@ struct RelationshipIntelligence: View {
     var body:some View {
         ScrollView {
             LazyVStack(alignment:.leading,spacing:18) {
-                Text("O teu círculo real").font(.largeTitle.bold())
-                Text("Histórico, relação atual e evidência por pessoa. Tu decides o resultado.").foregroundStyle(.secondary)
+                VStack(alignment:.leading,spacing:4) {
+                    Text("O teu círculo real").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.ink)
+                    Text("Histórico, relação atual e evidência por pessoa. Tu decides o resultado.").font(.subheadline).foregroundStyle(Theme.ink2)
+                }
                 sources
-                HStack {
+                HStack(spacing:10) {
                     metric("Analisados",rows.count);metric("Protegidos",rows.filter(\.protected).count)
                     metric("Candidatos",candidateIDs.count)
                 }
-                VStack(alignment:.leading,spacing:14) {
-                    Text("1 · Construir plano").font(.headline)
-                    Stepper("Objetivo: \(target) mútuos",value:$target,in:0...10000,step:10)
+                VStack(alignment:.leading,spacing:12) {
+                    Eyebrow(text:"1 · Construir plano")
+                    Stepper("Objetivo: \(target) mútuos",value:$target,in:0...10000,step:10).font(.subheadline)
                     Button("Construir plano de revisão",systemImage:"slider.horizontal.3") {Task{var preferences=store.workspace["relationship-preferences"] as? [String:Any] ?? [:];preferences["target"]=target;await store.save("relationship-preferences",preferences);await refresh();filter="Objetivo";selected=candidateIDs}}
                         .buttonStyle(ProminentButtonStyle()).disabled(loading || rows.isEmpty)
-                    Text("Conversas, proteções, contradições e dados insuficientes ficam fora das sugestões automáticas.").font(.caption).foregroundStyle(.secondary)
-                }.fcCard()
-                HStack {Image(systemName:"magnifyingglass");TextField("Nome, username ou etiqueta",text:$query).textInputAutocapitalization(.never)}.fcCard()
-                HStack {
-                    Picker("Sinais",selection:$filter){ForEach(filters,id:\.self){Text($0)}}
-                    Picker("Relação",selection:$relation){ForEach(["Todos","Mútuos","Não me seguem","Eu não sigo"],id:\.self){Text($0)}}
-                    Picker("Confiança",selection:$confidence){ForEach(["Todas","Alta","Média","Baixa"],id:\.self){Text($0)}}
-                }.font(.caption)
-                HStack {
-                    Text("\(visible.count) perfis · \(selected.count) selecionados").font(.caption)
+                    Text("Conversas, proteções, contradições e dados insuficientes ficam fora das sugestões automáticas.").font(.footnote).foregroundStyle(Theme.ink2)
+                }.surface()
+                SearchField(text:$query,prompt:"Nome, username ou etiqueta")
+                ChipRow {
+                    ForEach(filters,id:\.self){name in Chip(title:name,selected:filter==name){filter=name}}
+                }
+                HStack(spacing:14) {
+                    Menu {Picker("Relação",selection:$relation){ForEach(["Todos","Mútuos","Não me seguem","Eu não sigo"],id:\.self){Text(RelationFilter.label($0)).tag($0)}}} label:{Label(relation=="Todos" ? "Relação":RelationFilter.label(relation),systemImage:"person.2")}
+                    Menu {Picker("Confiança",selection:$confidence){ForEach(["Todas","Alta","Média","Baixa"],id:\.self){Text($0)}}} label:{Label(confidence=="Todas" ? "Confiança":confidence,systemImage:"gauge.with.dots.needle.33percent")}
                     Spacer()
-                    Button("Selecionar resultados"){selected=Set(visible.filter{!$0.protected}.map(\.id))}.font(.caption)
+                }.font(.footnote.weight(.semibold))
+                HStack {
+                    Text("\(visible.count) perfis · \(selected.count) selecionados").font(.footnote).foregroundStyle(Theme.ink2).monospacedDigit()
+                    Spacer()
+                    Button("Selecionar resultados"){selected=Set(visible.filter{!$0.protected}.map(\.id))}.font(.footnote.weight(.semibold))
                 }
-                if loading {HStack{ProgressView(model.legacyProgress.isEmpty ? "A cruzar evidências…":model.legacyProgress);Spacer();Button("Cancelar"){model.webCoordinator?.cancelArchiveImport();if loadingOperation != "import" {model.cancelCurrentScan()}}}}
-                if let failure {Text(failure).foregroundStyle(Theme.caution).fcCard()}
-                ForEach(visible) {row in
-                    HStack(spacing:12) {
-                        Button {if selected.contains(row.id){selected.remove(row.id)}else{selected.insert(row.id)}} label:{Image(systemName:row.protected ? "shield.fill":selected.contains(row.id) ? "checkmark.circle.fill":"circle").font(.title2)}.disabled(row.protected)
-                        ProfileAvatar(photoURL:row.person.photoURL,size:42)
-                        Button {detail=row} label:{
-                            VStack(alignment:.leading,spacing:5) {
-                                Text("@"+row.person.username).font(.subheadline.bold())
-                                Text(row.person.name).font(.caption).foregroundStyle(.secondary)
-                                Text(Self.circles[row.circle] ?? row.circle).font(.caption2).foregroundStyle(FCStyle.mint)
-                                Text("Ligação \(row.score)% · confiança \(row.confidence)%").font(.caption2).foregroundStyle(.secondary)
-                                if (store.workspace["profile-meta"] as? [String:[String:Any]])?[row.id]?["mutedPosts"] as? Bool == true {Label("Silenciado",systemImage:"speaker.slash").font(.caption2).foregroundStyle(.secondary)}
-                                if let decision=(store.workspace["relationship-decisions"] as? [String:String])?[row.id] {Text(decision=="keep" ? "Manter":decision=="review" ? "Rever depois":decision).font(.caption2).foregroundStyle(FCStyle.accent)}
-                            }.frame(maxWidth:.infinity,alignment:.leading)
-                        }.buttonStyle(.plain)
-                        Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary)
-                    }.fcCard()
+                if loading {HStack{ProgressView(model.legacyProgress.isEmpty ? "A cruzar evidências…":model.legacyProgress).font(.footnote);Spacer();Button("Cancelar"){model.webCoordinator?.cancelArchiveImport();if loadingOperation != "import" {model.cancelCurrentScan()}}.font(.footnote.weight(.semibold))}.surface()}
+                if let failure {InlineNotice(text:failure)}
+                if !visible.isEmpty {
+                    VStack(spacing:0) {
+                        ForEach(visible) {row in
+                            HStack(spacing:12) {
+                                Button {if selected.contains(row.id){selected.remove(row.id)}else{selected.insert(row.id)}} label:{
+                                    Image(systemName:row.protected ? "shield.fill":selected.contains(row.id) ? "checkmark.circle.fill":"circle").font(.title2)
+                                        .foregroundStyle(row.protected || selected.contains(row.id) ? Theme.signalInk:Theme.ink3).frame(width:30,height:44)
+                                }.buttonStyle(.plain).disabled(row.protected)
+                                ProfileAvatar(photoURL:row.person.photoURL,size:42,name:row.person.username)
+                                Button {detail=row} label:{
+                                    VStack(alignment:.leading,spacing:4) {
+                                        Text("@"+row.person.username).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                                        Text(Self.circles[row.circle] ?? row.circle).font(.caption.weight(.semibold)).foregroundStyle(Theme.signalInk)
+                                        HStack(spacing:8) {
+                                            scoreBar(row.score)
+                                            Text("ligação \(row.score)% · confiança \(row.confidence)%").font(.caption).foregroundStyle(Theme.ink2).monospacedDigit()
+                                        }
+                                        if (store.workspace["profile-meta"] as? [String:[String:Any]])?[row.id]?["mutedPosts"] as? Bool == true {Label("Silenciado",systemImage:"speaker.slash").font(.caption).foregroundStyle(Theme.ink2)}
+                                        if let decision=(store.workspace["relationship-decisions"] as? [String:String])?[row.id] {Text(decision=="keep" ? "Manter":decision=="review" ? "Rever depois":decision).font(.caption.weight(.semibold)).foregroundStyle(Theme.reach)}
+                                    }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                Image(systemName:"chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+                            }.padding(.horizontal,12).padding(.vertical,8)
+                            Divider().overlay(Theme.line).padding(.leading,96)
+                        }
+                    }.surface(padding:0)
                 }
-                if rows.isEmpty && !loading {ContentUnavailableView("Começa pela audiência",systemImage:"person.2",description:Text("Faz um check e importa o histórico Instagram para recuperar a análise de ligações."))}
+                if rows.isEmpty && !loading {EmptyState(icon:"circle.hexagongrid",title:"Começa pela audiência",message:"Faz um check e importa o histórico do Instagram para recuperar a análise de ligações.").surface(padding:0)}
             }.padding(20)
-        }.background(FCStyle.background)
+        }.background(Theme.canvas)
         .animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:selected.count)
         .safeAreaInset(edge:.bottom){decisionsBar}
         .task{await store.load();target=(store.workspace["relationship-preferences"] as? [String:Any])?["target"] as? Int ?? 300;await refresh()
@@ -214,7 +248,13 @@ struct RelationshipIntelligence: View {
             }
         }
     }
-    private func metric(_ title:String,_ count:Int)->some View {VStack(alignment:.leading){Text(count.formatted()).font(.title2.bold());Text(title).font(.caption2).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,alignment:.leading).fcCard()}
+    private func metric(_ title:String,_ count:Int)->some View {VStack(alignment:.leading,spacing:2){Text(count.formatted()).font(.system(.title2,design:.rounded).weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink);Text(title).font(.caption).foregroundStyle(Theme.ink2)}.frame(maxWidth:.infinity,alignment:.leading).surface(padding:12,radius:16)}
+    private func scoreBar(_ score:Int)->some View {
+        ZStack(alignment:.leading) {
+            Capsule().fill(Theme.sunken)
+            Capsule().fill(Theme.signal).frame(width:max(3,CGFloat(min(100,max(0,score)))*0.44))
+        }.frame(width:44,height:5).accessibilityHidden(true)
+    }
     private var sources:some View {
         VStack(alignment:.leading,spacing:12) {
             Label("Fontes da análise",systemImage:"square.stack.3d.up").font(.headline)
@@ -322,28 +362,54 @@ struct NativeActionReview:View {
         NavigationStack {
             List {
                 Section {
-                    Text(title).font(.title2.bold())
-                    LabeledContent("Perfis neste lote",value:eligible.count.formatted())
-                    LabeledContent("Excluídos / incompatíveis",value:(people.count-eligible.count).formatted())
-                    LabeledContent("Pausas previstas",value:pacingEstimate)
-                    Text("Acresce o tempo das respostas e confirmações do Instagram.").font(.caption).foregroundStyle(.secondary)
-                    Text("Cada resultado é confirmado individualmente. Podes retirar perfis antes de iniciar.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("3 · Revisão final") {
+                    VStack(alignment:.leading,spacing:14) {
+                        Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.ink)
+                        HStack(alignment:.firstTextBaseline,spacing:8) {
+                            Text(eligible.count.formatted()).font(.system(size:44,weight:.semibold,design:.rounded)).monospacedDigit().foregroundStyle(Theme.ink)
+                            Text(eligible.count == 1 ? "perfil neste lote":"perfis neste lote").font(.subheadline).foregroundStyle(Theme.ink2)
+                        }
+                        HStack(spacing:10) {
+                            summary("Excluídos",(people.count-eligible.count).formatted())
+                            summary("Pausas previstas",pacingEstimate)
+                        }
+                        Text("Acresce o tempo de resposta do Instagram. Cada resultado é confirmado individualmente e podes retirar perfis antes de iniciar.")
+                            .font(.footnote).foregroundStyle(Theme.ink2)
+                    }.padding(.vertical,6)
+                }.listRowBackground(Theme.surface)
+                Section {
                     ForEach(people){person in
-                        HStack {
-                            ProfileAvatar(photoURL:person.photoURL,size:36)
-                            VStack(alignment:.leading){Text("@"+person.username);Text(person.name).font(.caption).foregroundStyle(.secondary)}
+                        HStack(spacing:12) {
+                            ProfileAvatar(photoURL:person.photoURL,size:38,name:person.username)
+                            VStack(alignment:.leading,spacing:2){
+                                Text("@"+person.username).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                                if model.tools.protectedIDs.contains(person.id) {Text("Protegido").font(.caption).foregroundStyle(Theme.signalInk)}
+                                else if !person.canPerform(action) {Text("Não aplicável a esta relação").font(.caption).foregroundStyle(Theme.ink3)}
+                                else if !person.name.isEmpty {Text(person.name).font(.caption).foregroundStyle(Theme.ink2)}
+                            }
                             Spacer()
                             Toggle("Incluir "+person.username,isOn:Binding(get:{!excluded.contains(person.id) && !model.tools.protectedIDs.contains(person.id) && person.canPerform(action)},set:{if $0{excluded.remove(person.id)}else{excluded.insert(person.id)}})).labelsHidden()
                                 .disabled(model.tools.protectedIDs.contains(person.id) || !person.canPerform(action))
                         }
                     }
-                }
-            }.navigationTitle("Rever operação").navigationBarTitleDisplayMode(.inline)
-                .toolbar{ToolbarItem(placement:.cancellationAction){Button("Voltar"){dismiss()}}}
-                .safeAreaInset(edge:.bottom){Button("Confirmar \(eligible.count) perfis"){let confirmed=eligible;dismiss();Task{await model.tools.execute(action,people:confirmed)}}.buttonStyle(ProminentButtonStyle()).disabled(eligible.isEmpty || model.tools.operationRunning).padding().frame(maxWidth:.infinity).background(.ultraThinMaterial)}
+                } header: {Text("Revisão final")}
+                .listRowBackground(Theme.surface)
+            }
+            .fcForm()
+            .navigationTitle("Rever operação").navigationBarTitleDisplayMode(.inline)
+            .toolbar{ToolbarItem(placement:.cancellationAction){Button("Voltar"){dismiss()}}}
+            .safeAreaInset(edge:.bottom){
+                Button(eligible.isEmpty ? "Nenhum perfil incluído":"Confirmar \(eligible.count) \(eligible.count == 1 ? "perfil":"perfis")"){let confirmed=eligible;dismiss();Task{await model.tools.execute(action,people:confirmed)}}
+                    .buttonStyle(SignalButtonStyle())
+                    .disabled(eligible.isEmpty || model.tools.operationRunning)
+                    .padding(.horizontal,20).padding(.vertical,12).frame(maxWidth:.infinity).background(.bar)
+            }
         }.tint(Theme.signalInk)
+    }
+    private func summary(_ title:String,_ value:String)->some View {
+        VStack(alignment:.leading,spacing:3) {
+            Text(value).font(.headline).monospacedDigit().foregroundStyle(Theme.ink)
+            Text(title).font(.caption).foregroundStyle(Theme.ink2)
+        }.frame(maxWidth:.infinity,alignment:.leading).padding(12).background(Theme.raised,in:.rect(cornerRadius:12,style:.continuous))
     }
 }
 
