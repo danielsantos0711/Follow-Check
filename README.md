@@ -11,7 +11,7 @@ App iOS (SwiftUI, iOS 17+) que mostra quem te segue de volta e acompanha as muda
 | **Watchlist** | Cada lista (seguidores ou a seguir) aparece como *verificada* ou *parcial*. Quando o Instagram devolve uma lista baralhada e incompleta, a app explica o que aconteceu e não compara essa lista; a outra lista continua a ser comparada. |
 | **Atividade** | Três fluxos: a tua conta, a Watchlist e as ações que fizeste. |
 | **Mensagens** | Abertas pelo avião de papel no Início ou em Conta. Lista de conversas e chat em ecrãs nativos. Uma página escondida da tua própria sessão do Instagram (`/direct/`) desenha as conversas, e `direct-reader.js` lê o que ela mostra. Não há chamadas extra à API e nada fica guardado. Experimental: se o Instagram mudar a página, a app diz que não conseguiu ler e oferece abrir as mensagens no Instagram. |
-| **Conta** | Sessão, mensagens no Instagram, ritmo (Equilibrado, Cuidadoso ou Lento, com valores avançados), pausa mínima de 1 h após um aviso do Instagram, cópias de segurança, diagnóstico e aparência. |
+| **Conta** | Sessão, mensagens no Instagram, ritmo (Equilibrado, Cuidadoso ou Lento, com valores avançados), duração da pausa após um aviso do Instagram (podes terminá-la), limites das filas (ou sem limites), cópias de segurança, diagnóstico e aparência. |
 
 O que foi removido na 2.6:
 
