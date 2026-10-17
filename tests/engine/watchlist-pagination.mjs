@@ -348,14 +348,14 @@ test('Counter refresh does not accept a different-size second traversal',async()
  const result=await e.run('monitorCollectList("following","99","p",0,100,"42",{expected:3,recheckExpected:recheck})');
  assert.equal(calls,2);assert.equal(result.expected,4);assert.equal(result.coverageComplete,false);
 });
-test('A surplus with different identities on the second traversal preserves the reference before followers',async()=>{
+test('A one-account surplus on a clean terminal list is accepted in a single traversal (build 33)',async()=>{
  const e=collector(),kinds=[];let profiles=0;
- const key='followcheck:watchlist:v1:42:99',baseline={complete:true,marker:'preserve'};e.memory[key]=structuredClone(baseline);
- e.run('assertGlobalSafety=async()=>{};assertGlobalScanBudget=async()=>{};getAnyInstagramTab=async()=>({id:1});resolveMonitorInstagramSession=async()=>({sessionId:"local",userId:"42"})');
- e.ctx.resolveWatchlistTarget=async()=>{profiles++;return {id:'99',username:'target',reportedFollowers:1171,reportedFollowing:343};};
- e.ctx.monitorFetchPage=async kind=>{kinds.push(kind);return page(Array.from({length:344},(_,n)=>n+1+(kinds.length===2?1:0)));};
- await assert.rejects(e.run('runNativeWatchlistScan({checkId:"test-check",accountId:"42",profileId:"watchlist:42",targetId:"target"})'),error=>error.code==='watch_coverage_incomplete' && error.coverage.collected===344 && error.coverage.reported===343);
- assert.deepEqual(kinds,['following','following']);assert.equal(profiles,2);assert.deepEqual(e.memory[key],baseline);
+ e.run('assertGlobalSafety=async()=>{};assertGlobalScanBudget=async()=>{};commitGlobalScanBudget=async()=>{};getAnyInstagramTab=async()=>({id:1});resolveMonitorInstagramSession=async()=>({sessionId:"local",userId:"42"});nativePort={postMessage:value=>webkit.messageHandlers.followcheckIOS.postMessage(value)}');
+ e.ctx.resolveWatchlistTarget=async()=>{profiles++;return {id:'99',username:'target',reportedFollowers:344,reportedFollowing:343};};
+ e.ctx.monitorFetchPage=async kind=>{kinds.push(kind);return page(Array.from({length:344},(_,n)=>n+1));};
+ const result=await e.run('runNativeWatchlistScan({checkId:"test-check",accountId:"42",profileId:"watchlist:42",targetId:"target"})');
+ assert.deepEqual(kinds,['following','followers']);assert.equal(profiles,2);assert.equal(result.snapshot.following,344);
+ assert.equal(e.memory['followcheck:watchlist:v1:42:99'].listValidation.following.mode,'terminal-drift');
 });
 
 function prepareWatchlist(e,profile) {
@@ -390,22 +390,22 @@ test('The build 30 fixture completes through HTTP, native bridge and registry wi
  const result=e.messages.find(value=>value.event==='watchlist_result');
  assert.ok(result);assert.equal(result.baseline,true);assert.equal(result.coverageVerified,false);assert.equal(result.enumerationVerified,true);
  assert.equal(result.snapshot.following,344);assert.equal(result.snapshot.followers,1171);assert.equal(result.reportedCounts.following,343);
- assert.deepEqual(counts,{following:28,followers:47});assert.equal(profiles,3);assert.equal(requests.length,75);
- assert.deepEqual(requests.filter(r=>r.kind==='following'&&r.offset===0).map(r=>r.offset),[0,0]);
+ assert.deepEqual(counts,{following:14,followers:47});assert.equal(profiles,2);assert.equal(requests.length,61);
+ assert.deepEqual(requests.filter(r=>r.kind==='following'&&r.offset===0).map(r=>r.offset),[0]);
  assert.ok(requests.every(r=>r.query.every(k=>['count','search_surface','max_id'].includes(k))));
  assert.deepEqual(pauses,[15,30,45,60]);assert.ok(progress.some(p=>p.title==='Pausa entre listas'));
  const snapshot=e.memory['followcheck:watchlist:v1:42:99'];
  assert.equal(snapshot.comparisonVersion,5);assert.equal(snapshot.complete,true);assert.equal(snapshot.target.reportedFollowing,343);assert.equal(snapshot.listValidation.following.reported,343);
- assert.equal(snapshot.listValidation.following.mode,'stable-surplus');assert.equal(snapshot.listValidation.following.independentPasses,2);
+ assert.equal(snapshot.listValidation.following.mode,'terminal-drift');
  assert.equal(snapshot.listValidation.followers.mode,'count-matched');
  const target=state.targets[0];assert.equal(target.baselineReady,true);assert.equal(target.lastErrorCode,'',target.lastError);assert.equal(target.lastChangeCount,0);
  assert.equal(target.following,344);assert.equal(target.reportedFollowing,343);assert.equal(target.coverageVerified,false);
- assert.equal(state.events.filter(x=>x.type==='watch_count_warning').length,1);assert.equal(notifications.length,1);assert.match(notifications[0].message,/diverge/);
+ assert.equal(state.events.filter(x=>x.type==='watch_count_warning').length,0);assert.equal(notifications.length,1);assert.match(notifications[0].message,/Referência/);
  await microtasks();
  assert.ok(e.messages.some(x=>x.kind==='iosState'&&x.watchlist.targets[0]?.coverageVerified===false));
  await e.run('backgroundLogWrites');
  const logs=e.memory['followcheck:technical-logs:background:v1'];
- assert.ok(logs.some(x=>x.event==='enumeration_stable'));assert.ok(logs.some(x=>x.event==='profile-counter-divergence'));
+ assert.ok(logs.some(x=>x.event==='count_drift_accepted'));assert.ok(!logs.some(x=>x.event==='coverage_retry'));
  const diagnostics=JSON.stringify(logs);
  assert.ok(!diagnostics.includes('"10001"'));assert.ok(!diagnostics.includes('stableIdentityIds'));
  assert.deepEqual(e.memory['followcheck:ios:list-checkpoints:v1'],{});
@@ -462,7 +462,7 @@ test('A rejection during the second surplus traversal preserves both snapshot an
 });
 test('A final profile count change rejects an otherwise stable surplus and preserves the baseline',async()=>{
  const e=collector();let profiles=0;
- prepareWatchlist(e,async()=>({id:'99',username:'target',reportedFollowers:2,reportedFollowing:++profiles<3?3:4}));
+ prepareWatchlist(e,async()=>({id:'99',username:'target',reportedFollowers:2,reportedFollowing:++profiles<2?3:10}));
  e.ctx.monitorFetchPage=async kind=>page(kind==='following'?[1,2,3,4]:[5,6]);
  const baseline={complete:true,marker:'preserve'},key='followcheck:watchlist:v1:42:99';e.memory[key]=structuredClone(baseline);
  await assert.rejects(scan(e),{code:'watch_coverage_incomplete'});assert.deepEqual(e.memory[key],baseline);
@@ -471,8 +471,8 @@ test('A final profile count change rejects an otherwise stable surplus and prese
 test('Stable surplus can independently validate both relations without rewriting either counter',async()=>{
  const e=collector();prepareWatchlist(e,{id:'99',username:'target',reportedFollowers:3,reportedFollowing:2});
  const kinds=[];e.ctx.monitorFetchPage=async kind=>{kinds.push(kind);return page(kind==='following'?[1,2,3]:[4,5,6,7]);};
- const result=await scan(e);assert.deepEqual(kinds,['following','following','followers','followers']);
- assert.equal(result.coverageWarnings.length,2);assert.equal(result.snapshot.followers,4);assert.equal(result.reportedCounts.followers,3);
+ const result=await scan(e);assert.deepEqual(kinds,['following','followers']);
+ assert.equal(result.coverageWarnings.length,0);assert.equal(result.snapshot.followers,4);assert.equal(result.reportedCounts.followers,3);
  assert.equal(result.coverageVerified,false);assert.equal(result.relationCoverage.following,false);assert.equal(result.relationCoverage.followers,false);
 });
 
@@ -526,6 +526,6 @@ test('A real profile total change from 343 to 344 can complete only after a new 
  e.ctx.resolveWatchlistTarget=async()=>({id:'99',username:'target',reportedFollowers:2,reportedFollowing:++profiles===1?343:344});
  e.ctx.monitorFetchPage=async kind=>{kinds.push(kind);return page(kind==='following'?Array.from({length:344},(_,n)=>n+1):[1,2]);};
  const result=await e.run('runNativeWatchlistScan({checkId:"test-check",accountId:"42",profileId:"watchlist:42",targetId:"target"})');
- assert.deepEqual(kinds,['following','following','followers']);assert.equal(profiles,3);assert.equal(result.snapshot.following,344);
+ assert.deepEqual(kinds,['following','followers']);assert.equal(profiles,2);assert.equal(result.snapshot.following,344);
  assert.equal(e.memory['followcheck:watchlist:v1:42:99'].complete,true);assert.equal(e.memory['followcheck:watchlist:v1:42:99'].target.reportedFollowing,344);
 });

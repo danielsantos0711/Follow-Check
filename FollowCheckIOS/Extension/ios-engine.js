@@ -402,9 +402,8 @@ if (globalThis.__FOLLOWCHECK_IOS_SHELL__ && !globalThis.__FOLLOWCHECK_IOS_ENGINE
       const safety=await readGlobalSafetyState();
       if (safety.cooldownUntil>0) {
         const until=args.release===true ? Date.now() : (safety.triggeredAt || Date.now())+Math.round(minutes)*60000;
-        // An explicit Instagram limit keeps its minimum pause whatever the preference.
-        const floor=!THROTTLE_REASONS.includes(String(safety.reason||'')) ? 0 : safety.serverCooldownUntil>0 ? safety.serverCooldownUntil : (safety.triggeredAt || Date.now())+THROTTLE_MIN_COOLDOWN_MS;
-        await writeGlobalSafetyState({...safety,cooldownUntil:Math.max(safety.serverCooldownUntil,until,floor)},'local-cooldown-adjusted');
+        // The local pause is the user's decision. A deadline sent by Instagram itself still stands.
+        await writeGlobalSafetyState({...safety,cooldownUntil:Math.max(safety.serverCooldownUntil,until)},'local-cooldown-adjusted');
       }
       await publish();return {ok:true};
     }

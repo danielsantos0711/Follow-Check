@@ -58,7 +58,7 @@ const GLOBAL_THROTTLE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 // After an Instagram limit without an explicit deadline (spam flag,
 // feedback_required) no local preference may resume requests sooner than this.
 // An explicit Retry-After from the server is authoritative instead.
-const THROTTLE_MIN_COOLDOWN_MS = 60 * 60 * 1000;
+const THROTTLE_DEFAULT_COOLDOWN_MS = 60 * 60 * 1000;
 const THROTTLE_REASONS = ["rate_limited", "soft_throttle", "http_429"];
 const GLOBAL_SCAN_BUDGET_KEY = "followcheck:global-scan-budget:v1";
 const MONITOR_PACING_SETTINGS_KEY = "followcheck:monitor-pacing:v1";
@@ -211,10 +211,9 @@ async function tripGlobalSafety(reason, message, options = {}) {
   let localDuration = GLOBAL_THROTTLE_COOLDOWN_MS;
   if (globalThis.__FOLLOWCHECK_IOS_SHELL__) {
     const stored = await chrome.storage.local.get('followcheck:ios:cooldown-minutes:v1');
-    const minutes = Number(stored['followcheck:ios:cooldown-minutes:v1'] ?? 1440);
-    localDuration = (Number.isFinite(minutes) ? Math.max(1, Math.min(1440, minutes)) : 1440) * 60000;
-    // Without an explicit server deadline (a spam flag), keep the minimum pause.
-    if (THROTTLE_REASONS.includes(String(reason || "")) && !(Number(options.serverCooldownUntil) > Date.now())) localDuration = Math.max(localDuration, THROTTLE_MIN_COOLDOWN_MS);
+    // The user's own choice decides the local pause; without one it is one hour.
+    const minutes = Number(stored['followcheck:ios:cooldown-minutes:v1'] ?? THROTTLE_DEFAULT_COOLDOWN_MS / 60000);
+    localDuration = (Number.isFinite(minutes) ? Math.max(1, Math.min(1440, minutes)) : 60) * 60000;
   }
   const serverCooldownUntil = Math.max(previous.serverCooldownUntil, Number(options.serverCooldownUntil || 0));
   const requestedUntil = globalThis.__FOLLOWCHECK_IOS_SHELL__ ? Date.now() + localDuration : Number(options.cooldownUntil || Date.now() + localDuration);
@@ -1930,7 +1929,7 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
   // A recovery is a fresh traversal, never a union of different observations.
   // Otherwise membership churn with an unchanged count could fabricate completeness.
   for (let pass = 1; pass <= 2; pass += 1) {
-    const result = await monitorCollectListPass(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId, {knownTotal, pass, surplusCandidate});
+    const result = await monitorCollectListPass(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId, {knownTotal, pass, surplusCandidate, stopWhenShuffled: options.stopWhenShuffled === true});
     const surplusEligible = options.allowStableSurplus === true && knownTotal !== null &&
       result.terminal === true && result.users.length > knownTotal && result.duplicates === 0;
     if (surplusEligible && surplusCandidate && surplusCandidate.expected === knownTotal &&
@@ -1938,6 +1937,25 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
       const verified={...result,enumerationVerified:true,countVerified:false,validationMode:"stable-surplus",independentPasses:2,stableIdentityIds:surplusCandidate.ids};
       postMonitorDiagnostic(profileId,"enumeration_stable",{list:kind,observed:result.users.length,reported:knownTotal,independentPasses:2,countVerified:false});
       return verified;
+    }
+    // A shuffled list was already stopped early; another pass cannot converge.
+    if (result.orderingUnstable === true) {
+      iosListCheckpoints.delete(checkpointKey);
+      await persistIOSListCheckpoints();
+      return result;
+    }
+    // Device diagnostic 2026-10-17 (build 33): a terminal list with no repeated
+    // account read 344 against a counter of 343, and the full re-read that followed
+    // spent 14 requests shortly before Instagram's spam limit. Instagram counters
+    // lag and include hidden accounts, so a small drift on a clean terminal list is
+    // accepted in one pass. Removals still need two consecutive observations.
+    const drift = knownTotal === null ? 0 : result.users.length - knownTotal;
+    if (options.acceptCountDrift === true && result.terminal === true && result.duplicates === 0 &&
+        drift !== 0 && Math.abs(drift) <= watchlistDriftTolerance(knownTotal)) {
+      postMonitorDiagnostic(profileId, "count_drift_accepted", {list: kind, observed: result.users.length, reported: knownTotal, drift});
+      iosListCheckpoints.delete(checkpointKey);
+      await persistIOSListCheckpoints();
+      return {...result, enumerationVerified: true, countVerified: false, validationMode: "terminal-drift", countDrift: drift};
     }
     if (knownTotal === null || result.coverageComplete || result.pass >= 2) return result;
     // Instagram served the full row count but repeated a significant share of
@@ -1977,6 +1995,10 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
     await monitorSleep(Math.max(10000, activeMonitorPacing.pageDelayMaxMs));
     globalThis.__FOLLOWCHECK_IOS_ASSERT_ACTIVE__?.();
   }
+}
+
+function watchlistDriftTolerance(reported) {
+  return Math.max(2, Math.ceil(Number(reported || 0) * 0.01));
 }
 
 function watchlistOrderingUnstable(result, knownTotal) {
@@ -2049,6 +2071,7 @@ async function monitorCollectListPass(kind, userId, profileId, rangeStart, range
         apiErrorType: error?.apiErrorType || "",
         restrictionSignal: error?.restrictionSignal || null,
       });
+      if (error && typeof error === "object") error.partialObservation = {list: kind, observed: users.size, receivedUsers, duplicates: receivedUsers - users.size, pages: pageNumber};
       if (["logout_confirmed", "challenge_required", "rate_limited"].includes(error?.code)) throw error;
       let nextTransport = null;
       while (++transportIndex < transportOrder.length) {
@@ -2104,6 +2127,19 @@ async function monitorCollectListPass(kind, userId, profileId, rangeStart, range
       duplicates: page.users.length - (users.size - previousSize),
       receivedUsers,
     });
+    // Instagram shuffles some lists of other accounts: pages start repeating people.
+    // More pages only add fewer new people and push towards the spam limit, so the
+    // observation stops here and is reported as partial (never compared).
+    const repeated = receivedUsers - users.size;
+    if (options.stopWhenShuffled === true && hasNext && knownTotal !== null && pageNumber >= 4 &&
+        repeated >= Math.max(8, Math.ceil(receivedUsers * 0.05))) {
+      postMonitorDiagnostic(profileId, "ordering_unstable", {list: kind, pages: pageNumber, observed: users.size, expected: knownTotal, receivedUsers, duplicates: repeated, stoppedEarly: true});
+      iosListCheckpoints.delete(checkpointKey);
+      await persistIOSListCheckpoints().catch(() => {});
+      return {users: [...users.values()], transport, pages: pageNumber, expected, coverageComplete: false, terminal: true,
+        stoppedEarly: true, orderingUnstable: true, enumerationVerified: false, countVerified: false,
+        validationMode: "partial-observation", pass, receivedUsers, duplicates: repeated, attempts: transportAttempts};
+    }
     if (hasNext) {
       const cursorKey = String(cursor || "");
       if (!cursorKey || cursors.has(cursorKey)) {
@@ -2899,6 +2935,13 @@ function sameMonitorIdentitySet(left,right) {
 function watchlistListProof(result,reported) {
   const observed=result?.users?.length;
   if (result?.terminal !== true || !Number.isSafeInteger(reported) || reported < 0) return null;
+  if (result.interrupted === true) {
+    return {mode:"partial-observation",terminal:true,observed:Number(result.observed||0),reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0),interrupted:true};
+  }
+  if (result.validationMode === "terminal-drift" && result.enumerationVerified === true && result.duplicates === 0 &&
+      observed !== reported && Math.abs(observed - reported) <= watchlistDriftTolerance(reported)) {
+    return {mode:"terminal-drift",terminal:true,observed,reported};
+  }
   if (result.orderingUnstable === true && watchlistOrderingUnstable(result, reported)) {
     return {mode:"partial-observation",terminal:true,observed,reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0)};
   }
@@ -2912,7 +2955,10 @@ function watchlistListProof(result,reported) {
 
 function assertWatchlistCoverage(before,after,followers,following,lists=null) {
   const coverage={followers,following,reportedFollowers:after.reportedFollowers,reportedFollowing:after.reportedFollowing};
-  if (before.reportedFollowers!==after.reportedFollowers || before.reportedFollowing!==after.reportedFollowing ||
+  // A counter may move by a few accounts while the lists are read; each list is
+  // then proven against the final counter. A larger move still rejects the check.
+  const moved=(a,b)=>!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || Math.abs(a-b)>(lists ? watchlistDriftTolerance(b) : 0);
+  if (moved(before.reportedFollowers,after.reportedFollowers) || moved(before.reportedFollowing,after.reportedFollowing) ||
       !Number.isSafeInteger(after.reportedFollowers) || after.reportedFollowers < 0 || !Number.isSafeInteger(after.reportedFollowing) || after.reportedFollowing < 0 ||
       (lists ? lists.followers?.users?.length !== followers || lists.following?.users?.length !== following ||
         !watchlistListProof(lists.followers,after.reportedFollowers) || !watchlistListProof(lists.following,after.reportedFollowing) ||
@@ -2940,6 +2986,7 @@ function watchlistReferenceLists(snapshot, viewer, target) {
     if (!users.every(user => /^\d{1,32}$/.test(String(user?.id || ''))) || new Set(users.map(user=>String(user.id))).size!==users.length) continue;
     if (proof.mode==='count-matched') usable[kind]=users.length===proof.reported;
     else if (proof.mode==='stable-surplus') usable[kind]=users.length>proof.reported && proof.independentPasses===2 && sameMonitorIdentitySet(proof.stableIdentityIds,users.map(user=>String(user.id)));
+    else if (proof.mode==='terminal-drift') usable[kind]=users.length!==proof.reported && Math.abs(users.length-proof.reported)<=watchlistDriftTolerance(proof.reported);
   }
   return usable.followers || usable.following ? usable : null;
 }
@@ -3546,7 +3593,7 @@ async function runNativeWatchlistScan(message = {}) {
     postMonitorProgress(profileId, `Watchlist · @${target.username}`, "A recolher as contas que segue", 3);
     const followingResult = await monitorCollectList(
       "following", target.id, profileId, 3, 46, String(viewerUserId),
-      {expected:target.reportedFollowing,recheckExpected:recheckTargetCount("following"),allowStableSurplus:true},
+      {expected:target.reportedFollowing,recheckExpected:recheckTargetCount("following"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true},
     );
     assertCollectedCoverage("following",followingResult);
     if(activeMonitorPacing.pauseDurationMs>0) {
@@ -3554,14 +3601,29 @@ async function runNativeWatchlistScan(message = {}) {
       await monitorSleep(activeMonitorPacing.pauseDurationMs);
     }
     postMonitorProgress(profileId, `Watchlist · @${target.username}`, "A recolher os seguidores", 47);
-    const followerResult = await monitorCollectList(
-      "followers", target.id, profileId, 47, 90, String(viewerUserId),
-      {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true},
-    );
+    // When Instagram stops the second list, the first one is already proven:
+    // keep it instead of discarding the whole check (device diagnostic, build 33).
+    let followerResult, interruption = null;
+    try {
+      followerResult = await monitorCollectList(
+        "followers", target.id, profileId, 47, 90, String(viewerUserId),
+        {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true},
+      );
+    } catch (error) {
+      const followingProof = watchlistListProof(followingResult, target.reportedFollowing);
+      if (!THROTTLE_REASONS.includes(String(error?.code || "")) || !followingProof || followingProof.mode === "partial-observation") throw error;
+      interruption = error;
+      const seen = error.partialObservation || {};
+      followerResult = {users: [], terminal: true, interrupted: true, validationMode: "interrupted", observed: Number(seen.observed || 0),
+        duplicates: Number(seen.duplicates || 0), receivedUsers: Number(seen.receivedUsers || 0), pages: Number(seen.pages || 0),
+        transport: "main", expected: target.reportedFollowers};
+      await backgroundLog("warn", "watchlist", "list-interrupted", `O Instagram pediu uma pausa durante os seguidores (página ${Number(seen.pages || 0) + 1}). As contas seguidas já estavam verificadas e foram guardadas.`, {checkId, code: String(error.code || "")});
+    }
     assertCollectedCoverage("followers",followerResult);
     const following = followingResult.users;
     const followers = followerResult.users;
-    const finalTarget=await resolveWatchlistTarget({...message,targetUserId:target.id,targetUsername:target.username,requireCounts:true});
+    // After a limit, no further request is sent: the counters read at the start stand.
+    const finalTarget=interruption ? target : await resolveWatchlistTarget({...message,targetUserId:target.id,targetUsername:target.username,requireCounts:true});
     await backgroundLog("info", "watchlist", "coverage", "Comparação entre identidades recolhidas e totais do perfil.", {checkId, collectedFollowers:followers.length,collectedFollowing:following.length,beforeFollowers:target.reportedFollowers,beforeFollowing:target.reportedFollowing,afterFollowers:finalTarget.reportedFollowers,afterFollowing:finalTarget.reportedFollowing});
     assertWatchlistCoverage(target,finalTarget,followers.length,following.length,{followers:followerResult,following:followingResult});
     const listValidation={followers:watchlistListProof(followerResult,finalTarget.reportedFollowers),following:watchlistListProof(followingResult,finalTarget.reportedFollowing)};
@@ -3627,7 +3689,7 @@ async function runNativeWatchlistScan(message = {}) {
         listValidation: {followers: reference.followers.proof, following: reference.following.proof},
         observations: {followers: listValidation.followers, following: listValidation.following, at: completedAt},
         viewerUserId: String(viewerUserId),
-        target,
+        target: {...target, reportedFollowers: finalTarget.reportedFollowers, reportedFollowing: finalTarget.reportedFollowing},
         followers: reference.followers.users,
         following: reference.following.users,
         pendingRemovedFollowers: reference.followers.pending,
@@ -3642,7 +3704,8 @@ async function runNativeWatchlistScan(message = {}) {
       event: "watchlist_result",
       comparisonVerified: compare.followers || compare.following,
       coverageVerified: countVerified,
-      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates} : null])),
+      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,interrupted:listValidation[kind].interrupted===true} : null])),
+      interrupted: interruption ? String(interruption.code || "") : null,
       comparedLists: compare,
       enumerationVerified: true,
       coverageWarnings,
@@ -3702,7 +3765,8 @@ async function runNativeWatchlistScan(message = {}) {
         pendingNativeResult: result,
       },
     });
-    const completionDetail=countVerified ? "Snapshot completo guardado e comparado." : "Listas visíveis verificadas e guardadas; contador do perfil divergente.";
+    const completionDetail=interruption ? "O Instagram pediu uma pausa. A lista de contas seguidas foi verificada e guardada." : countVerified ? "Snapshot completo guardado e comparado." : "Listas verificadas e guardadas.";
+    if (interruption) await tripSafetyFromError(interruption, "watchlist-scan").catch(() => null);
     postMonitorProgress(profileId, `Watchlist · @${target.username}`, completionDetail, 99);
     if(coverageWarnings.length)await backgroundLog("warn","watchlist","profile-counter-divergence",coverageWarnings.join(" "),{checkId,countVerified:false,enumerationVerified:true});
     await backgroundLog("info", "watchlist", "watchlist-check-completed", `Watchlist @${target.username} atualizada.`, {

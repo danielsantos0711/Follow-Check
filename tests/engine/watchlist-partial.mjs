@@ -1,5 +1,5 @@
 // FollowCheck 2.6: per-list Watchlist validation, reproduced from the device
-// diagnostic of 2026-10-17 (build 32). No request reaches Instagram.
+// diagnostics of 2026-10-17 (builds 32 and 33). No request reaches Instagram.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -90,18 +90,39 @@ const scan=e=>e.run('runNativeWatchlistScan({checkId:"device-check",accountId:"4
 const key='followcheck:watchlist:v1:42:99';
 const profile=e=>{e.ctx.resolveWatchlistTarget=async()=>({id:'99',username:'priscila',reportedFollowers:1171,reportedFollowing:343});};
 
-test('Device diagnostic: verified following is kept while shuffled followers are reported as partial',async()=>{
+test('Device diagnostic: following is accepted in one pass and shuffled followers stop early',async()=>{
   const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
   const result=await scan(e);
-  assert.deepEqual(plain(counts),{following:28,followers:47},'followers are read once; no second traversal');
-  assert.equal(result.baseline,true);assert.equal(result.snapshot.following,344);assert.equal(result.snapshot.followers,916);
-  assert.deepEqual(plain(result.partialLists.followers),{observed:916,reported:1171,duplicates:257});assert.equal(result.partialLists.following,null);
+  assert.deepEqual(plain(counts),{following:14,followers:4},'no re-read of following; followers stop once they repeat');
+  assert.equal(result.baseline,true);assert.equal(result.snapshot.following,344);
+  const observed=result.partialLists.followers.observed;
+  assert.ok(observed>50 && observed<100);assert.equal(result.partialLists.followers.reported,1171);assert.ok(result.partialLists.followers.duplicates>=8);
+  assert.equal(result.partialLists.following,null);
   const snapshot=e.memory[key];
-  assert.equal(snapshot.comparisonVersion,5);assert.equal(snapshot.listValidation.following.mode,'stable-surplus');
+  assert.equal(snapshot.comparisonVersion,5);assert.equal(snapshot.listValidation.following.mode,'terminal-drift');
   assert.equal(snapshot.listValidation.followers.mode,'partial-observation');
-  assert.deepEqual(JSON.parse(JSON.stringify(e.run(`watchlistReferenceLists(${JSON.stringify(snapshot)},"42","99")`))),{followers:false,following:true});
-  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='ordering_unstable').length,1);
-  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='coverage_retry' && x.meta.list==='followers').length,0);
+  assert.deepEqual(plain(e.run(`watchlistReferenceLists(${JSON.stringify(snapshot)},"42","99")`)),{followers:false,following:true});
+  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='ordering_unstable' && x.meta.stoppedEarly).length,1);
+  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='coverage_retry').length,0);
+  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='count_drift_accepted').length,1);
+});
+
+test('Device diagnostic (build 33): a spam stop during followers keeps the verified following list',async()=>{
+  const counts={};const lists=deviceLists({followersShuffled:false});const serve=instagram(lists,counts);
+  const e=environment(async url=>{
+    if(url.includes('/followers/') && (counts.followers||0)>=13){counts.followers++;return new Response('{"status":"fail","message":"Please wait a few minutes","spam":true}',{status:400,headers:{'content-type':'application/json'}});}
+    return serve(url);
+  });
+  let profiles=0;e.ctx.resolveWatchlistTarget=async()=>{profiles++;return {id:'99',username:'priscila',reportedFollowers:1171,reportedFollowing:343};};
+  const result=await scan(e);
+  assert.equal(result.interrupted,'soft_throttle');assert.equal(profiles,1,'no profile request after the limit');
+  assert.equal(counts.following,14);assert.equal(counts.followers,14);
+  assert.deepEqual(plain(result.comparedLists),{followers:false,following:false});
+  assert.equal(result.partialLists.followers.interrupted,true);assert.equal(result.partialLists.followers.observed,325);
+  const snapshot=e.memory[key];
+  assert.equal(snapshot.following.length,344);assert.equal(snapshot.listValidation.following.mode,'terminal-drift');
+  assert.deepEqual(plain(e.run(`watchlistReferenceLists(${JSON.stringify(snapshot)},"42","99")`)),{followers:false,following:true});
+  const safety=await e.run('readGlobalSafetyState()');assert.equal(safety.reason,'soft_throttle');assert.equal(safety.blocked,true);
 });
 
 test('A partial followers observation keeps the last proven followers reference and still compares following',async()=>{
@@ -121,8 +142,17 @@ test('A partial followers observation keeps the last proven followers reference 
   const snapshot=e.memory[key];
   assert.equal(snapshot.followers.length,1171,'the complete followers reference is carried forward');
   assert.equal(snapshot.listValidation.followers.mode,'count-matched');assert.equal(snapshot.listValidation.followers.reported,1171);
-  assert.equal(snapshot.observations.followers.mode,'partial-observation');assert.equal(snapshot.observations.followers.observed,916);
-  assert.deepEqual(JSON.parse(JSON.stringify(e.run(`watchlistReferenceLists(${JSON.stringify(snapshot)},"42","99")`))),{followers:true,following:true});
+  assert.equal(snapshot.observations.followers.mode,'partial-observation');assert.ok(snapshot.observations.followers.observed<1171);
+  assert.deepEqual(plain(e.run(`watchlistReferenceLists(${JSON.stringify(snapshot)},"42","99")`)),{followers:true,following:true});
+});
+
+test('A counter drift beyond the tolerance still needs a second traversal',async()=>{
+  const counts={};const e=environment(instagram({followers:Array.from({length:1171},(_,n)=>20000+n+1),following:Array.from({length:360},(_,n)=>10000+n+1)},counts));profile(e);
+  await scan(e);
+  assert.equal(counts.following,30,'a large surplus is only accepted after an identical second traversal');
+  assert.equal(e.memory[key].listValidation.following.mode,'stable-surplus');
+  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='count_drift_accepted').length,0);
+  assert.equal(e.ctx.diagnostics.filter(x=>x.event==='coverage_retry').length,1);
 });
 
 test('When both lists are shuffled nothing is committed and the reference is preserved',async()=>{
@@ -141,26 +171,28 @@ test('A short list without repeats is not accepted as partial and still blocks t
   assert.equal(counts.followers,44,'an unchanged counter with no repeats needs no second traversal');
 });
 
-test('After a spam signal the pause lasts at least one hour even with a one-minute preference',async()=>{
+test('After a spam signal the pause follows the user preference, one hour by default',async()=>{
   const e=environment(async()=>{throw Error('no network');});
-  e.memory['followcheck:ios:cooldown-minutes:v1']=1;
   e.ctx.failure=Object.assign(Error('spam'),{code:'soft_throttle'});
-  const before=Date.now();await e.run('tripSafetyFromError(failure,"test")');
-  const state=e.memory['followcheck:global-safety:v1'];
-  assert.equal(state.reason,'soft_throttle');assert.ok(state.cooldownUntil>=before+60*60_000-1000,'floor of one hour');
-  assert.ok(state.cooldownUntil<before+2*60*60_000);
+  let before=Date.now();await e.run('tripSafetyFromError(failure,"test")');
+  let state=e.memory['followcheck:global-safety:v1'];
+  assert.equal(state.reason,'soft_throttle');assert.ok(Math.abs(state.cooldownUntil-(before+60*60_000))<5000,'one hour without a preference');
+  const chosen=environment(async()=>{throw Error('no network');});
+  chosen.memory['followcheck:ios:cooldown-minutes:v1']=5;chosen.ctx.failure=e.ctx.failure;
+  before=Date.now();await chosen.run('tripSafetyFromError(failure,"test")');
+  state=chosen.memory['followcheck:global-safety:v1'];
+  assert.ok(Math.abs(state.cooldownUntil-(before+5*60_000))<5000,'the chosen five minutes');
 });
 
-test('Ending the local wait early cannot shorten the floor after a spam signal',async()=>{
+test('Ending the local wait after a spam signal is the user decision',async()=>{
   const e=environment(async()=>{throw Error('no network');});
-  e.ctx.__FOLLOWCHECK_IOS_SHELL__=true;
   vm.runInContext(source('ios-engine.js'),e.ctx);
-  e.memory['followcheck:ios:cooldown-minutes:v1']=1;
   e.ctx.failure=Object.assign(Error('spam'),{code:'soft_throttle'});
   await e.run('tripSafetyFromError(failure,"test")');
-  const triggered=e.memory['followcheck:global-safety:v1'].triggeredAt;
-  await e.ctx.__FOLLOWCHECK_IOS_CONTROL__('cooldown',{minutes:1,release:true});
-  assert.ok(e.memory['followcheck:global-safety:v1'].cooldownUntil>=triggered+60*60_000);
+  const now=Date.now();
+  await e.ctx.__FOLLOWCHECK_IOS_CONTROL__('cooldown',{minutes:60,release:true});
+  assert.ok(e.memory['followcheck:global-safety:v1'].cooldownUntil<=now+1000);
+  assert.equal((await e.run('readGlobalSafetyState()')).blocked,false);
 });
 
 test('A version 5 reference never accepts a partial or altered list',()=>{

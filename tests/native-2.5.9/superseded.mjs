@@ -1,9 +1,6 @@
 // Runs the native 2.5.9 regression suite against the current engine.
 // The 2.5.11 engine deliberately replaces the 2.5.9 rendered-list Watchlist reader
 // with validated REST pagination and discards checkpoints without v4 proof.
-// FollowCheck 2.6 keeps a one-hour minimum pause after an explicit Instagram
-// limit (device diagnostic 2026-10-17: a one-minute pause led to a second spam
-// block), so a throttle pause can no longer be ended at once.
 // The tests for those replaced behaviours must fail; every other test must pass.
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -21,8 +18,6 @@ const superseded = new Set([
   'A direct follower connection owned by the watched profile remains valid',
   'Watchlist collection prefers the rendered list and rejects an incomplete native reply',
   'Rendered list completion requires unambiguous pagination evidence from the latest page',
-  // 2.6 throttle floor
-  'Local cooldown duration is configurable and can be ended without clearing a security hold',
 ]);
 
 const suite = fileURLToPath(new URL('./runtime-regression.mjs', import.meta.url));

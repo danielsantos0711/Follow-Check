@@ -285,26 +285,38 @@ private struct PaceScreen: View {
             .listRowBackground(Theme.surface)
 
             Section {
-                Stepper("Esperar pelo menos \(RelativeTime.interval(cooldownMinutes))", value: $cooldownMinutes, in: 60...1440, step: 30)
+                Picker("Duração da pausa", selection: $cooldownMinutes) {
+                    ForEach(Array(Set([1, 5, 15, 30, 60, 120, 360, 720, 1440, cooldownMinutes])).sorted(), id: \.self) { Text(RelativeTime.interval($0)).tag($0) }
+                }
+                .onChange(of: cooldownMinutes) { _, minutes in
+                    Task { do { try await model.configureCooldown(minutes: minutes); message = "Duração guardada." } catch { message = error.localizedDescription } }
+                }
                 if let until = model.activeCooldown {
                     LabeledContent("Pausa atual termina") { Text(until, style: .relative).monospacedDigit() }
-                    Button("Aplicar esta duração à pausa atual") {
-                        Task { do { try await model.configureCooldown(minutes: cooldownMinutes); message = "Duração aplicada." } catch { message = error.localizedDescription } }
+                    if model.serverCooldownUntil.map({ $0 > Date() }) != true {
+                        Button("Terminar pausa agora", role: .destructive) { Task { await model.endPause() } }
                     }
                 }
-            } header: { Text("Depois de um aviso do Instagram") } footer: {
-                Text("Quando o Instagram pede para abrandar, os checks param durante pelo menos uma hora. Um prazo indicado pelo próprio Instagram é sempre respeitado.")
+            } header: { Text("Pausa depois de um aviso do Instagram") } footer: {
+                Text("Quando o Instagram pede para abrandar, os checks param durante este tempo. Podes terminar a pausa quando quiseres. Só um prazo enviado pelo próprio Instagram não pode ser encurtado pela app.")
             }
             .listRowBackground(Theme.surface)
 
             Section {
-                Stepper("Até \(batch) perfis por fila", value: $batch, in: 1...500)
-                Stepper("Até \(daily) ações por 24 h", value: $daily, in: 1...500)
+                Toggle("Sem limite de perfis nem de ações por dia", isOn: Binding(get: { batch >= 10000 && daily >= 10000 }, set: { off in
+                    if off { batch = 10000; daily = 10000 } else { batch = 50; daily = 150 }
+                }))
+                if batch < 10000 || daily < 10000 {
+                    Stepper("Até \(batch) perfis por fila", value: $batch, in: 1...10000, step: batch < 50 ? 5 : 25)
+                    Stepper("Até \(daily) ações por 24 h", value: $daily, in: 1...10000, step: daily < 50 ? 5 : 25)
+                }
                 Stepper("\(actionDelay) s entre ações", value: $actionDelay, in: 2...120)
                 Stepper(actionEvery == 0 ? "Sem pausa longa" : "Pausa longa a cada \(actionEvery)", value: $actionEvery, in: 0...50)
-                Stepper("Pausa longa de \(RelativeTime.interval(max(1, actionPause / 60)))", value: $actionPause, in: 60...600, step: 30)
+                if actionEvery > 0 {
+                    Stepper("Pausa longa de \(RelativeTime.interval(max(1, actionPause / 60)))", value: $actionPause, in: 60...600, step: 30)
+                }
             } header: { Text("Ações sobre perfis") } footer: {
-                Text("Contam tentativas, incluindo as que falham. “Desligar nos dois sentidos” conta duas.")
+                Text("Sem limites, a fila só para quando terminar, quando a parares ou quando o Instagram recusar uma ação. As pausas entre ações continuam a aplicar-se; quanto mais curtas, maior o risco.")
             }
             .listRowBackground(Theme.surface)
 

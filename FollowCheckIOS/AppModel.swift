@@ -39,10 +39,13 @@ final class AppModel {
     struct PartialList: Equatable {
         let observed: Int
         let reported: Int
+        /// Instagram stopped the list with a limit; otherwise the list was shuffled.
+        let interrupted: Bool
         init?(_ value: Any?) {
             guard let value = value as? [String: Any], let observed = (value["observed"] as? NSNumber)?.intValue,
                   let reported = (value["reported"] as? NSNumber)?.intValue else { return nil }
             self.observed = observed; self.reported = reported
+            interrupted = value["interrupted"] as? Bool ?? false
         }
     }
     struct WatchTarget: Identifiable {
@@ -266,8 +269,6 @@ final class AppModel {
                 let untouched = zip(keys, [1, 15, 10]).allSatisfy { key, value in defaults.object(forKey: key) == nil || defaults.integer(forKey: key) == value }
                 if untouched { for (key, value) in zip(keys, values) { defaults.set(value, forKey: key) } }
             }
-            let cooldown = "followcheck.limits.cooldownMinutes"
-            if defaults.object(forKey: cooldown) != nil && defaults.integer(forKey: cooldown) < 60 { defaults.set(60, forKey: cooldown) }
             defaults.set(true, forKey: "followcheck.referencePacing.v26")
         }
     }
@@ -602,6 +603,17 @@ final class AppModel {
         guard let coordinator=webCoordinator,sessionAvailable else {throw NSError(domain:"FollowCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"Liga a sessão para aplicar esta preferência."])}
         _ = try await coordinator.request("cooldown",args:["minutes":minutes,"release":release])
     }
+    /// Ends the local protection pause now. A deadline sent by Instagram and a security hold stay.
+    func endPause() async {
+        let minutes = (UserDefaults.standard.object(forKey: "followcheck.limits.cooldownMinutes") as? NSNumber)?.intValue ?? 60
+        do {
+            try await configureCooldown(minutes: max(1, min(1440, minutes)), release: true)
+            webCoordinator?.control("state")
+            if let server = serverCooldownUntil, server > Date() {
+                notice = "A pausa local terminou, mas o Instagram indicou esperar até às \(server.formatted(date: .omitted, time: .shortened))."
+            } else { notice = "Pausa terminada. Podes voltar a verificar." }
+        } catch { notice = error.localizedDescription }
+    }
     func applyPacing() async throws {
         let defaults=UserDefaults.standard
         func value(_ key: String,_ fallback: Double) -> Double {(defaults.object(forKey:"followcheck.limits."+key) as? NSNumber)?.doubleValue ?? fallback}
@@ -615,6 +627,10 @@ final class AppModel {
         guard let coordinator=webCoordinator,sessionAvailable else{return}
         _ = try await coordinator.request("pacing",args:args)
         appliedPacing=signature
+        // The pause length after a limit is a user preference too; the engine reads it when a limit happens.
+        if let minutes = (defaults.object(forKey: "followcheck.limits.cooldownMinutes") as? NSNumber)?.intValue, !checkIsRunning {
+            _ = try? await coordinator.request("cooldown", args: ["minutes": max(1, min(1440, minutes))])
+        }
     }
 
     // MARK: Engine replies

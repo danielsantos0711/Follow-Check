@@ -242,9 +242,12 @@ struct TargetDetail: View {
         let lists = [target.partialFollowers.map { ("seguidores", $0) }, target.partialFollowing.map { ("a seguir", $0) }].compactMap { $0 }
         let names = lists.map { $0.0 }.joined(separator: " e ")
         let compared = [target.partialFollowers == nil ? "seguidores" : nil, target.partialFollowing == nil ? "a seguir" : nil].compactMap { $0 }
+        let interrupted = lists.contains { $0.1.interrupted }
         return VStack(alignment: .leading, spacing: 8) {
             Label("Porque é que a lista está incompleta", systemImage: "circle.lefthalf.filled").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
-            Text("O Instagram devolveu a lista de \(names) baralhada, com perfis repetidos entre páginas, e não mostrou todos (\(lists.map { "\($0.1.observed.formatted()) de \($0.1.reported.formatted())" }.joined(separator: "; "))). Pedir de novo só aumenta o risco de bloqueio, por isso o FollowCheck não compara esta lista: mantém a última referência completa e não inventa entradas nem saídas.")
+            Text(interrupted
+                 ? "O Instagram pediu uma pausa enquanto o FollowCheck lia a lista de \(names). Esta lista não foi comparada; a última referência completa mantém-se e o próximo check volta a lê-la."
+                 : "O Instagram devolveu a lista de \(names) baralhada: as páginas começaram a repetir perfis. Continuar só gastava pedidos e aproximava a conta do limite, por isso o FollowCheck parou essa lista (\(lists.map { "\($0.1.observed.formatted()) de \($0.1.reported.formatted())" }.joined(separator: "; ")) vistos). Não foi comparada: a última referência completa mantém-se e nada é inventado.")
                 .font(.footnote).foregroundStyle(Theme.ink).fixedSize(horizontal: false, vertical: true)
             if !compared.isEmpty {
                 Text("A lista \(compared.joined(separator: " e ")) foi verificada e as mudanças dela são reais.").font(.footnote.weight(.medium)).foregroundStyle(Theme.signalInk)

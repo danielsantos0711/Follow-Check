@@ -178,6 +178,7 @@ struct HomeScreen: View {
 /// The single place to start, follow and stop a check of your own account.
 struct CheckCard: View {
     let model: AppModel
+    @State private var confirmEnd = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -258,6 +259,14 @@ struct CheckCard: View {
             }
             Text(SafetyCopy.explanation(model.safetyReason)).font(.footnote).foregroundStyle(Theme.ink).fixedSize(horizontal: false, vertical: true)
             Text(lastCheck + ". Os dados guardados continuam disponíveis.").font(.caption).foregroundStyle(Theme.ink3)
+            if model.serverCooldownUntil.map({ $0 > Date() }) != true {
+                Button("Terminar pausa agora") { confirmEnd = true }.buttonStyle(QuietButtonStyle(fill: true))
+            }
+        }
+        .confirmationDialog("Terminar a pausa agora?", isPresented: $confirmEnd, titleVisibility: .visible) {
+            Button("Terminar pausa") { Task { await model.endPause() } }
+        } message: {
+            Text("Verificar logo a seguir a um aviso do Instagram aumenta o risco de um bloqueio mais longo. A decisão é tua.")
         }
     }
 
@@ -278,9 +287,9 @@ enum SafetyCopy {
     static func explanation(_ reason: String) -> String {
         switch reason {
         case "rate_limited", "http_429":
-            return "O Instagram pediu para abrandar. O FollowCheck espera pelo menos uma hora antes de voltar a ler listas, para não agravar a restrição."
+            return "O Instagram pediu para abrandar. O FollowCheck espera antes de voltar a ler listas, para não agravar a restrição. Podes mudar a duração em Conta › Ritmo."
         case "soft_throttle":
-            return "O Instagram sinalizou atividade invulgar. O check parou a tempo e a referência anterior foi preservada. Esperar evita um bloqueio mais longo."
+            return "O Instagram sinalizou atividade invulgar e o check parou. As listas já verificadas foram guardadas. Esperar reduz o risco de um bloqueio mais longo."
         case "challenge_required", "checkpoint_required":
             return "O Instagram pediu uma verificação. Abre o Instagram, confirma a conta e volta aqui."
         default:
