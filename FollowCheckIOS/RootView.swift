@@ -39,6 +39,7 @@ struct RootView: View {
             }
         }
         .tint(Theme.signalInk)
+        .fullScreenCover(isPresented: $model.messagesOpen) { MessagesScreen(model: model) }
         .sensoryFeedback(.selection, trigger: model.screen)
         .sensoryFeedback(.success, trigger: model.snapshot?.lastScanAt)
         .overlay(alignment: .top) {

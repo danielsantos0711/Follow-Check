@@ -29,6 +29,9 @@ struct HomeScreen: View {
             BrandMark(size: 30)
             Text("FollowCheck").font(.headline).foregroundStyle(Theme.ink)
             Spacer()
+            if model.sessionAvailable || model.isPreview {
+                IconButton(systemName: "paperplane", label: "Mensagens", action: model.openInstagramMessages)
+            }
             if !model.username.isEmpty {
                 Button { model.select(.settings) } label: {
                     ProfileAvatar(photoURL: model.profilePhotoURL, size: 38, name: model.username)

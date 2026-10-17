@@ -24,6 +24,7 @@
 		A10000000000000000000012 /* WatchlistScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* WatchlistScreen.swift */; };
 		A10000000000000000000013 /* ActivityScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* ActivityScreen.swift */; };
 		A10000000000000000000014 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* SettingsScreen.swift */; };
+		A10000000000000000000015 /* DirectMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* DirectMessages.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		B10000000000000000000012 /* WatchlistScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistScreen.swift; sourceTree = "<group>"; };
 		B10000000000000000000013 /* ActivityScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityScreen.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		B10000000000000000000015 /* DirectMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectMessages.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 				B10000000000000000000003 /* AppDelegate.swift */,
 				B10000000000000000000004 /* RootView.swift */,
 				B1000000000000000000000E /* DesignSystem.swift */,
+				B10000000000000000000015 /* DirectMessages.swift */,
 				B10000000000000000000010 /* HomeScreen.swift */,
 				B10000000000000000000011 /* CircleScreen.swift */,
 				B10000000000000000000012 /* WatchlistScreen.swift */,
@@ -179,6 +182,7 @@
 				A10000000000000000000003 /* AppDelegate.swift in Sources */,
 				A10000000000000000000004 /* RootView.swift in Sources */,
 				A1000000000000000000000B /* DesignSystem.swift in Sources */,
+				A10000000000000000000015 /* DirectMessages.swift in Sources */,
 				A10000000000000000000010 /* HomeScreen.swift in Sources */,
 				A10000000000000000000011 /* CircleScreen.swift in Sources */,
 				A10000000000000000000012 /* WatchlistScreen.swift in Sources */,

@@ -12,3 +12,5 @@ activity --preview-activity
 activity-watchlist --preview-activity --preview-activity-watchlist
 settings --preview-settings
 pace --preview-settings-pace
+messages --preview-messages
+chat --preview-chat

@@ -2,7 +2,7 @@
 set -euo pipefail
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"
-for name in ios-polyfill ios-policy ios-engine ios-theme profile-reader background page-executor mobile-bridge keepalive-shim hardening followcheck; do
+for name in ios-polyfill ios-policy ios-engine ios-theme profile-reader direct-reader background page-executor mobile-bridge keepalive-shim hardening followcheck; do
   test -s "FollowCheckIOS/Extension/$name.js"
   node --check "FollowCheckIOS/Extension/$name.js"
 done

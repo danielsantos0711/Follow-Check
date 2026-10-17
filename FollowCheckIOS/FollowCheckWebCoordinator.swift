@@ -145,6 +145,18 @@ final class FollowCheckWebCoordinator: NSObject {
         webView?.load(URLRequest(url:url))
     }
 
+    /// Places a helper WebView behind the session view, sharing its WebKit storage.
+    /// Returns the data store to use, or nil when the session view is not ready.
+    func hostHidden(_ view: UIView) -> Bool {
+        guard let host = webView, let container = host.superview else { return false }
+        view.frame = host.frame
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.insertSubview(view, belowSubview: host)
+        return true
+    }
+    var sessionDataStore: WKWebsiteDataStore? { webView?.configuration.websiteDataStore }
+    func directScript() -> String? { script(named: "direct-reader") }
+
     func open(_ url: URL) {
         guard isInstagramURL(url) else { return }
         shouldRestorePanel = false

@@ -183,6 +183,8 @@ final class AppModel {
         #endif
     }
     @ObservationIgnored lazy var tools = NativeToolsStore(model: self)
+    @ObservationIgnored lazy var direct = DirectStore(model: self)
+    var messagesOpen = false
     var phase: Phase = .starting
     var screen: Screen = .home
     /// The People lens to open next (set by the Home legend).
@@ -240,6 +242,7 @@ final class AppModel {
         if arguments.contains("--preview-activity") { screen = .activity }
         if arguments.contains(where: { $0.hasPrefix("--preview-settings") }) { screen = .settings }
         if arguments.contains("--preview-circle") { screen = .people }
+        if arguments.contains("--preview-messages") || arguments.contains("--preview-chat") { messagesOpen = true }
         if isPreview { loadPreviewData(arguments) }
         #endif
         if let data = UserDefaults.standard.data(forKey: eventsKey),
@@ -431,10 +434,19 @@ final class AppModel {
     }
     func cancelCurrentScan() { CheckContinuation.shared.finish(success:false);webCoordinator?.control("cancelCurrent") }
     func openInstagram() { screen = .instagram; webCoordinator?.openInstagramHome() }
-    func openInstagramMessages() {
-        guard !checkIsRunning else { notice = "Pára o check atual antes de abrir as mensagens."; return }
+    /// Native messages, read from the user's own session page (DirectMessages.swift).
+    func openInstagramMessages() { messagesOpen = true }
+    func openInstagramMessagesPage() {
+        messagesOpen = false
         screen = .instagram
         webCoordinator?.openInstagramInbox()
+    }
+    func openInstagramThread(_ id: String) {
+        guard id.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil,
+              let url = URL(string: "https://www.instagram.com/direct/t/\(id)/") else { return }
+        messagesOpen = false
+        screen = .instagram
+        webCoordinator?.open(url)
     }
     func openProfile(_ handle: String) {
         guard handle.range(of: "^[A-Za-z0-9._]{1,30}$", options: .regularExpression) != nil,
