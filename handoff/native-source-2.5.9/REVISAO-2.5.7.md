@@ -1,0 +1,9 @@
+# 2.5.7 — carregar o perfil antes de extrair os totais
+
+O relatório real de 17/10 11:59–12:00 UTC confirma HTTP 200, HTML de 719 KB, 89 scripts e 8198 nós analisados, mas nenhum objeto com identidade e totais completos. O leitor estático da 2.5.6 não demonstrou suportar o conteúdo entregue ao utilizador. A hipótese de carregamento posterior requer uma página renderizada, não uma terceira suposição sobre o HTML inicial.
+
+A Watchlist usa agora um RPC nativo para uma navegação WebKit normal ao perfil. A vista auxiliar partilha o WKWebsiteDataStore da sessão principal; não usa outro login nem exporta cookies. Um observador instalado antes dos scripts da página vê as respostas JSON que a própria página solicita por fetch/XHR, além dos scripts JSON adicionados durante o carregamento. Não faz pedidos de API próprios. Só devolve o perfil correspondente e contagens inteiras. Como alternativa, aceita ligações renderizadas de seguidores/a seguir com números exatos após confirmar a identidade separadamente. Nunca aceita totais abreviados.
+
+Limites: uma vista/leitura de cada vez, 25 segundos, cancelamento ao interromper o check/navegação/saída sem continuação, rejeição de outra conta/perfil e fecho da vista em todos os resultados. Redirecionamentos de autenticação, navegação exterior e HTTP 429 param a leitura. O estado de navegação HTTP é distinguido da rejeição de uma resposta observada. Mantêm-se validação antes/depois e conservação do snapshot anterior.
+
+Os testes exercitam dados que só chegam após o HTML inicial, identidade, ausência de totais, conflitos, números arredondados, 429 e cancelamento do RPC. Compilação nativa verifica a integração UIKit/WebKit. A aceitação e o esquema efetivos do Instagram no dispositivo continuam dependentes de validação real; não se declara o serviço remoto resolvido apenas por testes sintéticos.

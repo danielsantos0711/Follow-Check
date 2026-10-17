@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "FollowCheck",
+  "short_name": "FollowCheck",
+  "version": "10.20.8",
+  "description": "FollowCheck 2.9.8: a Watchlist sincroniza o perfil e confirma o motor antes do check.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "followcheck-android@dannysantos.ch",
+      "strict_min_version": "153.0",
+      "data_collection_permissions": {
+        "required": [
+          "authenticationInfo",
+          "personalCommunications",
+          "personallyIdentifyingInfo",
+          "websiteActivity",
+          "websiteContent"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "cookies",
+    "geckoViewAddons",
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "notifications",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "https://i.instagram.com/*",
+    "https://*.cdninstagram.com/*",
+    "https://*.fbcdn.net/*",
+    "https://zernio.com/*",
+    "https://*.r2.cloudflarestorage.com/*",
+    "https://media.zernio.com/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://instagram.com/*",
+        "https://www.instagram.com/*"
+      ],
+      "js": [
+        "mobile-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "Abrir FollowCheck",
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "32": "images/icon-32.png",
+      "48": "images/icon-48.png",
+      "128": "images/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon-16.png",
+    "32": "images/icon-32.png",
+    "48": "images/icon-48.png",
+    "128": "images/icon-128.png"
+  }
+}
