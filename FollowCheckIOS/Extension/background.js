@@ -1914,6 +1914,9 @@ function clearIOSListCheckpoints(profileId = null) {
   void persistIOSListCheckpoints().catch(()=>{});
 }
 async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId = userId, options = {}) {
+  if (options.rendered && typeof globalThis.__FOLLOWCHECK_IOS_LIST_READ__ === "function") {
+    return monitorCollectRenderedList(kind, userId, profileId, rangeStart, rangeEnd, options);
+  }
   let knownTotal = Number.isSafeInteger(options.expected) && options.expected >= 0 ? options.expected : null;
   const checkpointKey = `${viewerUserId}:${profileId}:${userId}:${kind}`;
   await restoreIOSListCheckpoints();
@@ -1998,9 +2001,9 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
 }
 
 // When Instagram refuses another account's followers list, the next checks read only
-// the accounts it follows and try the followers again after 24 h, 48 h, then up to 7 days.
+// the accounts it follows and try the followers again after 1 h, 3 h, 12 h, then daily.
 // A successful followers read clears the backoff.
-const WATCHLIST_FOLLOWERS_BACKOFF_HOURS = [24, 48, 96, 168];
+const WATCHLIST_FOLLOWERS_BACKOFF_HOURS = [1, 3, 12, 24];
 function watchlistFollowersBackoff(previous, result, at) {
   const followers = result?.partialLists?.followers;
   if (followers?.interrupted === true) {
@@ -2009,6 +2012,45 @@ function watchlistFollowersBackoff(previous, result, at) {
   }
   if (followers?.skipped === true) return {};
   return { followersBackoffLevel: -1, followersBackoffUntil: 0 };
+}
+
+// Another account's followers are read the way a person reads them: the profile's
+// followers list opened in a hidden page of the session and scrolled at the user's
+// pace; the app only observes what Instagram itself loads. A list read to its end is
+// usable when it is within 3% below the counter, which also counts deactivated and
+// restricted accounts that the list never shows. Removals still need two checks.
+async function monitorCollectRenderedList(kind, userId, profileId, rangeStart, rangeEnd, options) {
+  const expected = Number(options.expected);
+  postMonitorDiagnostic(profileId, "transport_chosen", {list: kind, transport: "rendered-webkit", attempt: 1});
+  const result = await globalThis.__FOLLOWCHECK_IOS_LIST_READ__({listKind: kind, userId: String(userId), username: options.rendered.username,
+    viewerUsername: options.rendered.viewerUsername || "", expectedCount: expected, profileId, rangeStart, rangeEnd, ...activeMonitorPacing});
+  const details = result?.diagnostics || {};
+  const users = Array.isArray(result?.data?.users) ? result.data.users.map(monitorUser).filter((user) => user.id) : [];
+  const observed = Number(details.collected ?? users.length) || 0;
+  const duplicates = Number(details.duplicateEntries) || 0, receivedUsers = Number(details.rawEntries) || 0, pages = Number(details.pages) || 0;
+  const code = String(result?.code || "");
+  postMonitorDiagnostic(profileId, "rendered_list_read", {list: kind, ok: result?.ok === true, code, observed, expected, pages, duplicates, terminal: details.terminal === true});
+  if (result?.ok !== true) {
+    if (["soft_throttle", "rate_limited", "login_required", "challenge_required", "instagram_account_changed", "watch_target_changed", "profile_counts_changed"].includes(code)) {
+      const error = monitorFailure(code === "soft_throttle" || code === "rate_limited"
+        ? "O Instagram recusou a lista de seguidores aberta no perfil."
+        : "A lista aberta no perfil foi interrompida.", code, Number(result?.status) || 0);
+      error.partialObservation = {list: kind, observed, receivedUsers, duplicates, pages};
+      error.retryAfterSeconds = Number(result?.retryAfter) || 0;
+      throw error;
+    }
+    // The list never reached its end: an honest partial observation, never compared.
+    return {users: [], terminal: true, renderedIncomplete: true, observed, duplicates, receivedUsers, pages,
+      transport: "rendered-webkit", expected, validationMode: "partial-observation"};
+  }
+  const unique = [...new Map(users.map((user) => [user.id, user])).values()];
+  return {users: unique, transport: "rendered-webkit", pages, expected, terminal: true, coverageComplete: unique.length === expected,
+    enumerationVerified: true, countVerified: unique.length === expected, validationMode: unique.length === expected ? "count-matched" : "rendered-observed",
+    pass: 1, receivedUsers, duplicates, attempts: []};
+}
+
+function watchlistRenderedClose(observed, reported) {
+  return observed <= reported + watchlistDriftTolerance(reported) && observed >= Math.floor(reported * 0.97) - 2;
 }
 
 function watchlistDriftTolerance(reported) {
@@ -2954,6 +2996,11 @@ function watchlistListProof(result,reported) {
     return {mode:"partial-observation",terminal:true,observed:Number(result.observed||0),reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0),interrupted:true};
   }
   if (result.skipped === true) return {mode:"partial-observation",terminal:true,observed:0,reported,duplicates:0,receivedUsers:0,skipped:true,backoffUntil:Number(result.backoffUntil||0)};
+  if (result.renderedIncomplete === true) return {mode:"partial-observation",terminal:true,observed:Number(result.observed||0),reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0)};
+  if (result.validationMode === "rendered-observed" && result.enumerationVerified === true) {
+    if (watchlistRenderedClose(observed, reported)) return {mode:"rendered-observed",terminal:true,observed,reported,duplicates:Number(result.duplicates||0)};
+    return {mode:"partial-observation",terminal:true,observed,reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0)};
+  }
   if (result.validationMode === "terminal-drift" && result.enumerationVerified === true && result.duplicates === 0 &&
       observed !== reported && Math.abs(observed - reported) <= watchlistDriftTolerance(reported)) {
     return {mode:"terminal-drift",terminal:true,observed,reported};
@@ -3003,6 +3050,7 @@ function watchlistReferenceLists(snapshot, viewer, target) {
     if (proof.mode==='count-matched') usable[kind]=users.length===proof.reported;
     else if (proof.mode==='stable-surplus') usable[kind]=users.length>proof.reported && proof.independentPasses===2 && sameMonitorIdentitySet(proof.stableIdentityIds,users.map(user=>String(user.id)));
     else if (proof.mode==='terminal-drift') usable[kind]=users.length!==proof.reported && Math.abs(users.length-proof.reported)<=watchlistDriftTolerance(proof.reported);
+    else if (proof.mode==='rendered-observed') usable[kind]=watchlistRenderedClose(users.length,proof.reported);
   }
   return usable.followers || usable.following ? usable : null;
 }
@@ -3637,7 +3685,8 @@ async function runNativeWatchlistScan(message = {}) {
     } else try {
       followerResult = await monitorCollectList(
         "followers", target.id, profileId, 47, 90, String(viewerUserId),
-        {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true},
+        {expected:target.reportedFollowers,recheckExpected:recheckTargetCount("followers"),allowStableSurplus:true,acceptCountDrift:true,stopWhenShuffled:true,
+          rendered:message.followersTransport === "api" ? null : {username:target.username,viewerUsername:String(resolvedSession?.username || "")}},
       );
     } catch (error) {
       const followingProof = watchlistListProof(followingResult, target.reportedFollowing);

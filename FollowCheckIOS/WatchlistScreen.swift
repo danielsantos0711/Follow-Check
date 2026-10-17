@@ -254,7 +254,7 @@ struct TargetDetail: View {
     private func backoffExplainer(_ target: AppModel.WatchTarget, until: Date) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Seguidores em espera", systemImage: "clock.arrow.circlepath").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
-            Text("O Instagram recusou a leitura dos seguidores desta conta. Até \(until.formatted(date: .abbreviated, time: .shortened)) os checks leem só quem ela segue, por isso terminam sempre e as mudanças continuam a ser reais. Depois a app volta a tentar os seguidores sozinha, cada vez mais espaçado se o Instagram voltar a recusar.")
+            Text("O Instagram recusou a leitura dos seguidores desta conta. Até \(until.formatted(date: .omitted, time: .shortened)) os checks leem só quem ela segue. Depois a app volta a tentar sozinha (1 h, 3 h, 12 h, depois diariamente). Podes tentar já a qualquer momento.")
                 .font(.footnote).foregroundStyle(Theme.ink).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Button("Tentar já") { model.watchlist("update", args: ["targetId": target.id, "retryFollowers": true]) }

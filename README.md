@@ -34,6 +34,7 @@ Os dados guardados não foram apagados. Se existir uma chave antiga da integraç
   - se o Instagram parar a segunda lista, a primeira, já verificada, é guardada e comparada.
 - **Pausa mínima (substituída na build 34):** após `rate_limited`, `soft_throttle` ou `http_429`, a pausa é de pelo menos 60 minutos, exceto quando o servidor indica um prazo. Terminar a espera mais cedo não encurta este mínimo.
 - **Pausa e limites (build 34):** a pausa após um aviso segue a tua escolha (1 min a 24 h, 1 h por omissão) e pode ser terminada. Só um prazo enviado pelo próprio Instagram não pode ser encurtado. As filas de ações podem correr sem limite de perfis nem de ações por dia.
+- **Seguidores de outras contas (build 37):** são lidos como uma pessoa os lê. A janela "Seguidores" do perfil abre numa página escondida da sessão e faz scroll ao ritmo configurado; o motor só observa o que o próprio Instagram carrega (`profile-reader.js`, modo lista, recuperado da 2.5.9). Uma lista lida até ao fim é comparada quando fica até 3% abaixo do contador, porque o contador também inclui contas desativadas e restritas que a lista nunca mostra. Uma lista muito incompleta fica parcial. Uma recusa do Instagram dá uma espera de 1 h, 3 h, 12 h e depois diária, sempre com "Tentar já". A lista "a seguir" continua pela paginação direta, que funciona.
 - **Ritmo:** os valores de referência por omissão da 2.5.x que nunca foram alterados passam para o preset Equilibrado (migração `v26`).
 
 ## Validação

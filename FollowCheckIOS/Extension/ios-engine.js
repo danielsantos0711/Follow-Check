@@ -39,26 +39,36 @@ if (globalThis.__FOLLOWCHECK_IOS_SHELL__ && !globalThis.__FOLLOWCHECK_IOS_ENGINE
   };
   globalThis.__FOLLOWCHECK_IOS_ASSERT_ACTIVE__ = assertEligible;
   if (globalThis.webkit?.messageHandlers?.followcheckRPC?.postMessage) {
-    globalThis.__FOLLOWCHECK_IOS_PROFILE_READ__ = async ({username,userId}) => {
+    const renderedProgress=new Map();
+    globalThis.__FOLLOWCHECK_IOS_RENDERED_PROGRESS__=value=>renderedProgress.get(value?.requestId)?.(value);
+    const readRendered = async (kind,details,progress=null) => {
       assertEligible();
       const requestId=crypto.randomUUID(),owner=accountCookie(),startGeneration=generation;
       const handler=globalThis.webkit.messageHandlers.followcheckRPC;
+      if(progress)renderedProgress.set(requestId,progress);
       let cancel;
       const cancelled=new Promise((_,reject)=>{
         cancel=()=>{
-          Promise.resolve(handler.postMessage({kind:'session.profile',details:{operation:'cancel',requestId,accountId:owner}})).catch(()=>{});
-          reject(policy.failure('ios_paused','A leitura do perfil foi interrompida.'));
+          Promise.resolve(handler.postMessage({kind,details:{operation:'cancel',requestId,accountId:owner}})).catch(()=>{});
+          reject(policy.failure('ios_paused','A leitura foi interrompida.'));
         };
         document.addEventListener('followcheck:ios:cancel',cancel,{once:true});
       });
       try {
-        const result=await Promise.race([handler.postMessage({kind:'session.profile',details:{requestId,accountId:owner,username,userId}}),cancelled]);
+        const result=await Promise.race([handler.postMessage({kind,details:{requestId,accountId:owner,...details}}),cancelled]);
         assertEligible();
-        if(generation!==startGeneration || owner!==accountCookie())throw policy.failure('instagram_account_changed','A conta mudou durante a leitura do perfil.');
-        await backgroundLog(result?.ok?'info':'warn','profile-rendered','profile-read',result?.ok?'Perfil carregado e totais exatos confirmados.':'A página carregada ainda não confirmou os totais do perfil.',{checkId:diagnosticCheckId,code:result?.code||'',status:result?.status||0,diagnostics:result?.diagnostics||{}});
+        if(generation!==startGeneration || owner!==accountCookie())throw policy.failure('instagram_account_changed','A conta mudou durante a leitura.');
+        const list=kind==='session.relations';
+        await backgroundLog(result?.ok?'info':'warn',list?'relations-rendered':'profile-rendered',list?'relations-read':'profile-read',result?.ok?(list?'Lista carregada e cobertura confirmada.':'Perfil carregado e totais exatos confirmados.'):(list?'A lista carregada não confirmou a cobertura completa.':'A página carregada ainda não confirmou os totais do perfil.'),{checkId:diagnosticCheckId,code:result?.code||'',status:result?.status||0,diagnostics:result?.diagnostics||{}});
         return result;
-      } finally {document.removeEventListener('followcheck:ios:cancel',cancel);}
+      } finally {renderedProgress.delete(requestId);document.removeEventListener('followcheck:ios:cancel',cancel);}
     };
+    globalThis.__FOLLOWCHECK_IOS_PROFILE_READ__ = details => readRendered('session.profile',details);
+    globalThis.__FOLLOWCHECK_IOS_LIST_READ__ = details => readRendered('session.relations',details,value=>{
+      const fraction=details.expectedCount>0?Math.min(0.98,Number(value.collected||0)/details.expectedCount):0;
+      postMonitorProgress(details.profileId,details.listKind==='followers'?'A confirmar seguidores':'A recolher contas seguidas',`${value.collected||0} de ${details.expectedCount} perfis · lista Instagram`,Math.round(details.rangeStart+fraction*(details.rangeEnd-details.rangeStart)));
+      backgroundLog('debug','watchlist-diagnostic','rendered-list-progress','Progresso da lista carregada.',{checkId:diagnosticCheckId,list:details.listKind,...value});
+    });
   }
   const originalFetch = globalThis.fetch.bind(globalThis);
   globalThis.fetch = async (input, options = {}) => {

@@ -239,13 +239,13 @@ test('A following-only target never requests the followers list and keeps its la
   const safety=await e.run('readGlobalSafetyState()');assert.equal(safety.blocked,false);
 });
 
-test('A followers refusal backs off 24 h, 48 h, 96 h, then 7 days, and a clean read clears it',()=>{
+test('A followers refusal backs off 1 h, 3 h, 12 h, then daily, and a clean read clears it',()=>{
   const e=environment(async()=>{throw Error('no network');});
   const at=1_000_000;e.ctx.at=at;
   const step=(previous,partial)=>plain(e.run(`watchlistFollowersBackoff(${JSON.stringify(previous)},${JSON.stringify({partialLists:{followers:partial}})},at)`));
   let target={};const hours=[];
   for(let i=0;i<5;i++){target={...target,...step(target,{interrupted:true})};hours.push((target.followersBackoffUntil-at)/3_600_000);}
-  assert.deepEqual(hours,[24,48,96,168,168]);
+  assert.deepEqual(hours,[1,3,12,24,24]);
   assert.deepEqual(step(target,{skipped:true}),{},'a skipped list keeps the backoff');
   assert.deepEqual(step(target,null),{followersBackoffLevel:-1,followersBackoffUntil:0});
 });
@@ -255,5 +255,55 @@ test('While followers are backed off the check reads only the following list and
   const result=await e.run(`runNativeWatchlistScan({checkId:"device-check",accountId:"42",profileId:"watchlist:42",targetId:"target",followersBackoffUntil:${Date.now()+3600_000}})`);
   assert.equal(counts.followers,undefined);assert.equal(counts.following,14);
   assert.equal(result.partialLists.followers.skipped,true);assert.ok(result.partialLists.followers.backoffUntil>Date.now());
+  assert.equal((await e.run('readGlobalSafetyState()')).blocked,false);
+});
+
+// The followers list opened in the profile, as a person reads it (session.relations).
+function renderedFollowers(e,reply){
+  e.ctx.listCalls=[];e.ctx.reply=reply;
+  e.run('globalThis.__FOLLOWCHECK_IOS_LIST_READ__=async details=>{listCalls.push(details);return reply(details);}');
+}
+const readList=(ids,extra={})=>({ok:true,code:'',data:{users:ids.map(id=>({id:String(id),username:`user${id}`}))},diagnostics:{collected:ids.length,pages:Math.ceil(ids.length/12),rawEntries:ids.length,duplicateEntries:0,terminal:true},...extra});
+
+test('Followers read from the profile list are compared when the list ends within 3% of the counter',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));
+  e.ctx.resolveWatchlistTarget=async()=>({id:'99',username:'priscila',reportedFollowers:1170,reportedFollowing:343});
+  const previous=Array.from({length:1140},(_,n)=>20000+n+1);
+  e.memory[key]={comparisonVersion:5,complete:true,viewerUserId:'42',target:{id:'99',username:'priscila',reportedFollowers:1170,reportedFollowing:343},
+    followers:users(previous),following:users(Array.from({length:344},(_,n)=>10000+n+1)),
+    listValidation:{followers:{mode:'rendered-observed',terminal:true,observed:1140,reported:1170},following:{mode:'terminal-drift',terminal:true,observed:344,reported:343}},
+    pendingRemovedFollowers:[],pendingStoppedFollowing:[],completedAt:1};
+  e.run('classifyWatchlistRemoved=async(removed,current,pending)=>({confirmed:[],unavailable:[],pending:removed})');
+  renderedFollowers(e,()=>readList([...previous.slice(1),29999]));
+  const result=await scan(e);
+  assert.equal(counts.followers,undefined,'no API request for followers');assert.equal(e.ctx.listCalls.length,1);
+  assert.equal(e.ctx.listCalls[0].listKind,'followers');assert.equal(e.ctx.listCalls[0].username,'priscila');
+  assert.deepEqual(plain(result.comparedLists),{followers:true,following:true});
+  assert.deepEqual(Array.from(result.changes.newFollowers,x=>x.id),['29999']);
+  assert.equal(e.memory[key].listValidation.followers.mode,'rendered-observed');
+  assert.deepEqual(plain(e.run(`watchlistReferenceLists(${JSON.stringify(e.memory[key])},"42","99")`)),{followers:true,following:true});
+});
+
+test('A profile list far below the counter is kept as partial and never compared',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
+  renderedFollowers(e,()=>readList(Array.from({length:916},(_,n)=>20000+n+1)));
+  const result=await scan(e);
+  assert.equal(result.partialLists.followers.observed,916);assert.equal(result.comparedLists.followers,false);
+});
+
+test('An Instagram refusal inside the profile list keeps the verified following list and backs off',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
+  renderedFollowers(e,()=>({ok:false,code:'soft_throttle',diagnostics:{collected:120,pages:10,rawEntries:120,duplicateEntries:0,terminal:false}}));
+  const result=await scan(e);
+  assert.equal(result.interrupted,'soft_throttle');assert.equal(result.partialLists.followers.observed,120);
+  assert.equal(e.memory[key].following.length,344);
+  assert.equal((await e.run('readGlobalSafetyState()')).reason,'soft_throttle');
+});
+
+test('A profile list that never reaches its end is partial, without a pause or backoff',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
+  renderedFollowers(e,()=>({ok:false,code:'list_render_incomplete',diagnostics:{collected:600,pages:50,rawEntries:600,terminal:false}}));
+  const result=await scan(e);
+  assert.equal(result.interrupted,null);assert.equal(result.partialLists.followers.observed,600);assert.equal(result.partialLists.followers.interrupted,false);
   assert.equal((await e.run('readGlobalSafetyState()')).blocked,false);
 });
