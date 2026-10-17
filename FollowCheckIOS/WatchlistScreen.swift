@@ -76,9 +76,11 @@ private struct WatchRunningCard: View {
 
 /// What we can honestly say about one list of a watched profile.
 enum ListHealth {
-    case pending, verified(Int), partial(observed: Int, reported: Int), off
-    init(baselineReady: Bool, count: Int, partial: AppModel.PartialList?, monitored: Bool = true) {
-        if !monitored || partial?.skipped == true { self = .off }
+    case pending, verified(Int), partial(observed: Int, reported: Int), off, waiting(Date)
+    init(baselineReady: Bool, count: Int, partial: AppModel.PartialList?, monitored: Bool = true, waitingUntil: Date? = nil) {
+        if !monitored { self = .off }
+        else if let waitingUntil { self = .waiting(waitingUntil) }
+        else if partial?.skipped == true { self = .off }
         else if let partial { self = .partial(observed: partial.observed, reported: partial.reported) }
         else if baselineReady { self = .verified(count) }
         else { self = .pending }
@@ -88,15 +90,16 @@ enum ListHealth {
 
 extension AppModel.WatchTarget {
     var followersMonitored: Bool { lists != "following" }
-    var followersHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: followers, partial: partialFollowers, monitored: followersMonitored) }
+    var followersHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: followers, partial: partialFollowers, monitored: followersMonitored, waitingUntil: followersBackoffUntil) }
     var followingHealth: ListHealth { ListHealth(baselineReady: baselineReady, count: following, partial: partialFollowing) }
-    var hasPartialList: Bool { (partialFollowers.map { !$0.skipped } ?? false) && followersMonitored || partialFollowing != nil }
+    var hasPartialList: Bool { (partialFollowers.map { !$0.skipped } ?? false) && followersMonitored && followersBackoffUntil == nil || partialFollowing != nil }
     var statusLine: (String, Tone) {
         if running { return ("A verificar", .signal) }
         if !error.isEmpty { return ("Último check incompleto", .caution) }
         if !enabled { return ("Em pausa", .neutral) }
         if !baselineReady { return ("A criar referência", .reach) }
         if partialFollowers != nil && partialFollowing != nil && followersMonitored { return ("Listas parciais", .caution) }
+        if followersBackoffUntil != nil && followersMonitored { return ("A comparar quem segue", .gain) }
         if hasPartialList { return ("Comparação parcial", .caution) }
         return ("A comparar", .gain)
     }
@@ -162,6 +165,10 @@ struct ListTile: View {
             case .off:
                 Text("—").font(.system(.title3, design: .rounded).weight(.semibold)).foregroundStyle(Theme.ink3)
                 Label("Não monitorizada", systemImage: "eye.slash").font(.caption2.weight(.semibold)).foregroundStyle(Theme.ink3)
+            case .waiting(let until):
+                Text("—").font(.system(.title3, design: .rounded).weight(.semibold)).foregroundStyle(Theme.ink3)
+                Label("Volta " + RelativeTime.short(until), systemImage: "clock.arrow.circlepath").font(.caption2.weight(.semibold)).foregroundStyle(Theme.reach)
+                    .accessibilityLabel("Em espera, volta a tentar " + RelativeTime.short(until))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -188,6 +195,7 @@ struct TargetDetail: View {
                 VStack(alignment: .leading, spacing: 18) {
                     hero(target)
                     if target.hasPartialList { partialExplainer(target) }
+                    if let until = target.followersBackoffUntil, target.followersMonitored { backoffExplainer(target, until: until) }
                     if !target.error.isEmpty { InlineNotice(text: target.error) }
                     Button { model.watchlist("run", args: ["targetId": target.id]) } label: {
                         Label(model.activeCheckScope == "account" ? "Verificar a seguir ao teu check" : "Verificar agora", systemImage: "arrow.triangle.2.circlepath")
@@ -241,6 +249,22 @@ struct TargetDetail: View {
                 .font(.footnote).foregroundStyle(Theme.ink2)
         }
         .surface(padding: 16, radius: 22)
+    }
+
+    private func backoffExplainer(_ target: AppModel.WatchTarget, until: Date) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Seguidores em espera", systemImage: "clock.arrow.circlepath").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+            Text("O Instagram recusou a leitura dos seguidores desta conta. Até \(until.formatted(date: .abbreviated, time: .shortened)) os checks leem só quem ela segue, por isso terminam sempre e as mudanças continuam a ser reais. Depois a app volta a tentar os seguidores sozinha, cada vez mais espaçado se o Instagram voltar a recusar.")
+                .font(.footnote).foregroundStyle(Theme.ink).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Tentar já") { model.watchlist("update", args: ["targetId": target.id, "retryFollowers": true]) }
+                    .buttonStyle(QuietButtonStyle(fill: true))
+                Button("Só quem segue") { model.watchlist("update", args: ["targetId": target.id, "lists": "following"]) }
+                    .buttonStyle(QuietButtonStyle(fill: true))
+            }
+        }
+        .padding(14)
+        .background(Theme.reach.opacity(0.1), in: .rect(cornerRadius: 16, style: .continuous))
     }
 
     private func partialExplainer(_ target: AppModel.WatchTarget) -> some View {

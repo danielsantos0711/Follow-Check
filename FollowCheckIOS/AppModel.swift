@@ -69,6 +69,8 @@ final class AppModel {
         let intervalMinutes: Int
         /// "following" or "both".
         let lists: String
+        /// Followers are retried after this date, following an Instagram refusal.
+        let followersBackoffUntil: Date?
         let lastSuccess: Date?
         let nextRun: Date?
         let error: String
@@ -91,6 +93,8 @@ final class AppModel {
             reportedFollowing = (v["reportedFollowing"] as? NSNumber)?.intValue
             intervalMinutes = (v["intervalMinutes"] as? NSNumber)?.intValue ?? 1440
             lists = v["lists"] as? String == "following" ? "following" : "both"
+            let backoff = (v["followersBackoffUntil"] as? NSNumber)?.doubleValue ?? 0
+            followersBackoffUntil = backoff > Date().timeIntervalSince1970 * 1000 ? Date(timeIntervalSince1970: backoff / 1000) : nil
             let ms = (v["lastSuccessAt"] as? NSNumber)?.doubleValue ?? 0
             lastSuccess = ms > 0 ? Date(timeIntervalSince1970: ms / 1000) : nil
             let next = (v["nextRunAt"] as? NSNumber)?.doubleValue ?? 0
@@ -376,7 +380,7 @@ final class AppModel {
         }
         targets = [
             WatchTarget(["id": "preview-target", "username": "priscila.pinto", "fullName": "Priscila Pinto", "enabled": true, "baselineReady": true, "followers": 916, "following": 344, "reportedFollowers": 1171, "reportedFollowing": 343,
-                         "partialLists": ["followers": ["observed": 916, "reported": 1171, "duplicates": 257]], "intervalMinutes": 1440, "lastSuccessAt": ms(1800), "nextRunAt": -ms(-84600)]),
+                         "partialLists": ["followers": ["observed": 25, "reported": 1171, "interrupted": true]], "followersBackoffUntil": now.addingTimeInterval(20 * 3600).timeIntervalSince1970 * 1000, "intervalMinutes": 1440, "lastSuccessAt": ms(1800), "nextRunAt": -ms(-84600)]),
             WatchTarget(["id": "preview-target-2", "username": "studio.norte", "fullName": "Studio Norte", "enabled": true, "baselineReady": true, "followers": 5204, "following": 341, "reportedFollowers": 5204, "reportedFollowing": 341, "intervalMinutes": 360, "lastSuccessAt": ms(20000)]),
             WatchTarget(["id": "preview-target-3", "username": "lisboa.film", "enabled": true, "baselineReady": false, "intervalMinutes": 1440]),
         ]

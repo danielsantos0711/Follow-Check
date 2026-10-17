@@ -238,3 +238,22 @@ test('A following-only target never requests the followers list and keeps its la
   assert.equal(e.memory[key].followers.length,1171,'the followers reference is untouched');
   const safety=await e.run('readGlobalSafetyState()');assert.equal(safety.blocked,false);
 });
+
+test('A followers refusal backs off 24 h, 48 h, 96 h, then 7 days, and a clean read clears it',()=>{
+  const e=environment(async()=>{throw Error('no network');});
+  const at=1_000_000;e.ctx.at=at;
+  const step=(previous,partial)=>plain(e.run(`watchlistFollowersBackoff(${JSON.stringify(previous)},${JSON.stringify({partialLists:{followers:partial}})},at)`));
+  let target={};const hours=[];
+  for(let i=0;i<5;i++){target={...target,...step(target,{interrupted:true})};hours.push((target.followersBackoffUntil-at)/3_600_000);}
+  assert.deepEqual(hours,[24,48,96,168,168]);
+  assert.deepEqual(step(target,{skipped:true}),{},'a skipped list keeps the backoff');
+  assert.deepEqual(step(target,null),{followersBackoffLevel:-1,followersBackoffUntil:0});
+});
+
+test('While followers are backed off the check reads only the following list and stays clean',async()=>{
+  const counts={};const e=environment(instagram(deviceLists(),counts));profile(e);
+  const result=await e.run(`runNativeWatchlistScan({checkId:"device-check",accountId:"42",profileId:"watchlist:42",targetId:"target",followersBackoffUntil:${Date.now()+3600_000}})`);
+  assert.equal(counts.followers,undefined);assert.equal(counts.following,14);
+  assert.equal(result.partialLists.followers.skipped,true);assert.ok(result.partialLists.followers.backoffUntil>Date.now());
+  assert.equal((await e.run('readGlobalSafetyState()')).blocked,false);
+});

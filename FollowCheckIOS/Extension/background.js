@@ -1997,6 +1997,20 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
   }
 }
 
+// When Instagram refuses another account's followers list, the next checks read only
+// the accounts it follows and try the followers again after 24 h, 48 h, then up to 7 days.
+// A successful followers read clears the backoff.
+const WATCHLIST_FOLLOWERS_BACKOFF_HOURS = [24, 48, 96, 168];
+function watchlistFollowersBackoff(previous, result, at) {
+  const followers = result?.partialLists?.followers;
+  if (followers?.interrupted === true) {
+    const level = Math.min(WATCHLIST_FOLLOWERS_BACKOFF_HOURS.length - 1, Number(previous?.followersBackoffLevel ?? -1) + 1);
+    return { followersBackoffLevel: level, followersBackoffUntil: at + WATCHLIST_FOLLOWERS_BACKOFF_HOURS[level] * 3_600_000 };
+  }
+  if (followers?.skipped === true) return {};
+  return { followersBackoffLevel: -1, followersBackoffUntil: 0 };
+}
+
 function watchlistDriftTolerance(reported) {
   return Math.max(2, Math.ceil(Number(reported || 0) * 0.01));
 }
@@ -2939,7 +2953,7 @@ function watchlistListProof(result,reported) {
   if (result.interrupted === true) {
     return {mode:"partial-observation",terminal:true,observed:Number(result.observed||0),reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0),interrupted:true};
   }
-  if (result.skipped === true) return {mode:"partial-observation",terminal:true,observed:0,reported,duplicates:0,receivedUsers:0,skipped:true};
+  if (result.skipped === true) return {mode:"partial-observation",terminal:true,observed:0,reported,duplicates:0,receivedUsers:0,skipped:true,backoffUntil:Number(result.backoffUntil||0)};
   if (result.validationMode === "terminal-drift" && result.enumerationVerified === true && result.duplicates === 0 &&
       observed !== reported && Math.abs(observed - reported) <= watchlistDriftTolerance(reported)) {
     return {mode:"terminal-drift",terminal:true,observed,reported};
@@ -3108,6 +3122,7 @@ async function completeWatchlistTarget(ownerId, targetId, result) {
     lastError: "",
     lastErrorCode: "",
     nextRunAt: previous.enabled ? completedAt + Math.max(60, Math.min(43200, Number(previous.intervalMinutes || 1440))) * 60_000 : 0,
+    ...watchlistFollowersBackoff(previous, result, completedAt),
   };
   state.targets[index] = target;
   state.events = [...events.reverse(), ...state.events].slice(0, 1000);
@@ -3160,6 +3175,7 @@ async function executeWatchlistTarget(ownerId, targetId) {
       targetProfilePicUrl: target.profilePicUrl || "",
       targetPrivateProfile: Boolean(target.privateProfile),
       lists: target.lists === "following" ? "following" : "both",
+      followersBackoffUntil: Number(target.followersBackoffUntil || 0),
       checkId: watchlistId(),
     });
     return await completeWatchlistTarget(ownerId, targetId, result);
@@ -3385,6 +3401,7 @@ async function handleWatchlistCommand(message = {}) {
       intervalMinutes,
       ...(typeof message.notificationsEnabled === "boolean" ? { notificationsEnabled: message.notificationsEnabled } : {}),
       ...(["following", "both"].includes(message.lists) ? { lists: message.lists } : {}),
+      ...(message.retryFollowers === true ? { followersBackoffUntil: 0 } : {}),
       nextRunAt: enabled ? Date.now() + intervalMinutes * 60_000 : 0,
     };
     return { ok: true, watchlist: await writeWatchlistState(ownerId, state) };
@@ -3604,7 +3621,9 @@ async function runNativeWatchlistScan(message = {}) {
     // Instagram restricts reading other accounts' followers far more than their
     // following list (device diagnostics, builds 33-34). A target can follow only
     // the accounts it follows; its followers keep their last reference untouched.
-    const followersWanted = message.lists !== "following";
+    const followersBackoff = Number(message.followersBackoffUntil || 0) > Date.now();
+    const followersWanted = message.lists !== "following" && !followersBackoff;
+    if (followersBackoff) await backgroundLog("info", "watchlist", "followers-backoff", "Seguidores em espera depois de uma recusa do Instagram; esta verificação lê só as contas seguidas.", {checkId, until: Number(message.followersBackoffUntil)});
     if(followersWanted && activeMonitorPacing.pauseDurationMs>0) {
       postMonitorProgress(profileId,"Pausa entre listas","A aguardar antes de começar a lista de seguidores",46);
       await monitorSleep(activeMonitorPacing.pauseDurationMs);
@@ -3614,7 +3633,7 @@ async function runNativeWatchlistScan(message = {}) {
     // keep it instead of discarding the whole check (device diagnostic, build 33).
     let followerResult, interruption = null;
     if (!followersWanted) {
-      followerResult = {users: [], terminal: true, skipped: true, validationMode: "skipped", observed: 0, duplicates: 0, receivedUsers: 0, pages: 0, transport: "none", expected: target.reportedFollowers};
+      followerResult = {users: [], terminal: true, skipped: true, backoffUntil: followersBackoff ? Number(message.followersBackoffUntil) : 0, validationMode: "skipped", observed: 0, duplicates: 0, receivedUsers: 0, pages: 0, transport: "none", expected: target.reportedFollowers};
     } else try {
       followerResult = await monitorCollectList(
         "followers", target.id, profileId, 47, 90, String(viewerUserId),
@@ -3715,7 +3734,7 @@ async function runNativeWatchlistScan(message = {}) {
       event: "watchlist_result",
       comparisonVerified: compare.followers || compare.following,
       coverageVerified: countVerified,
-      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,interrupted:listValidation[kind].interrupted===true,skipped:listValidation[kind].skipped===true} : null])),
+      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,interrupted:listValidation[kind].interrupted===true,skipped:listValidation[kind].skipped===true,backoffUntil:Number(listValidation[kind].backoffUntil||0)} : null])),
       interrupted: interruption ? String(interruption.code || "") : null,
       comparedLists: compare,
       enumerationVerified: true,
