@@ -711,6 +711,11 @@ struct WatchlistView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// Instagram usernames: 1–30 letters, digits, dots or underscores.
+    private var cleanUsername: String { username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "") }
+    private var usernameValid: Bool { cleanUsername.range(of: "^[A-Za-z0-9._]{1,30}$", options: .regularExpression) != nil }
+    private var alreadyWatched: Bool { model.targets.contains { $0.username.lowercased() == cleanUsername.lowercased() } }
+
     private var addSheet: some View {
         NavigationStack {
             Form {
@@ -723,7 +728,13 @@ struct WatchlistView: View {
                         ForEach(intervals, id: \.self) { minutes in Text(RelativeTime.interval(minutes)).tag(minutes) }
                     }
                 } header: { Text("Conta Instagram") } footer: {
-                    Text("O primeiro check cria a referência. A frequência só se aplica com a app ativa e respeita as pausas do motor.")
+                    if !cleanUsername.isEmpty && !usernameValid {
+                        Text("Um username tem até 30 letras, números, pontos ou underscores.").foregroundStyle(Theme.loss)
+                    } else if alreadyWatched {
+                        Text("Esta conta já está na tua Watchlist.").foregroundStyle(Theme.caution)
+                    } else {
+                        Text("O primeiro check cria a referência. A frequência só se aplica com a app ativa e respeita as pausas do motor.")
+                    }
                 }
                 .listRowBackground(Theme.surface)
             }
@@ -733,11 +744,10 @@ struct WatchlistView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancelar") { adding = false } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Adicionar") {
-                        let name = username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "")
-                        model.watchlist("add", args: ["username": name, "intervalMinutes": interval])
+                        model.watchlist("add", args: ["username": cleanUsername, "intervalMinutes": interval])
                         adding = false; username = ""
                     }
-                    .disabled(username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "").isEmpty || model.watchlistBusy)
+                    .disabled(!usernameValid || alreadyWatched || model.watchlistBusy)
                 }
             }
         }
