@@ -35,6 +35,10 @@ enum Theme {
     static let reach = Color(uiColor: .adaptive(0x2E5CC2, 0x8DB6FF))
     static let caution = Color(uiColor: .adaptive(0x965800, 0xF2B544))
     static let webBackground = UIColor.adaptive(0xF3F1EA, 0x0D0E0B)
+    /// Chart colours, at least 3:1 against surfaces in both appearances.
+    static let chartMutual = Color(uiColor: .adaptive(0x5E9410, 0xC8F560))
+    static let chartOut = Color(uiColor: .adaptive(0xC03A20, 0xFF7C5C))
+    static let chartIn = Color(uiColor: .adaptive(0x4A78D6, 0x8DB6FF))
 }
 
 enum Tone {
@@ -118,6 +122,7 @@ struct ProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
+            .lineLimit(1).minimumScaleFactor(0.85)
             .foregroundStyle(enabled ? Theme.onSignal : Theme.ink3)
             .padding(.horizontal, 16)
             .frame(minHeight: 44)
@@ -130,10 +135,12 @@ struct ProminentButtonStyle: ButtonStyle {
 struct QuietButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     var fill = false
+    var tint: Color = Theme.ink
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(enabled ? Theme.ink : Theme.ink3)
+            .lineLimit(1).minimumScaleFactor(0.85)
+            .foregroundStyle(enabled ? tint : Theme.ink3)
             .padding(.horizontal, 16)
             .frame(maxWidth: fill ? .infinity : nil, minHeight: 44)
             .background(Theme.raised, in: .rect(cornerRadius: 14, style: .continuous))
@@ -554,4 +561,15 @@ extension ISO8601DateFormatter {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+}
+
+enum PreviewFlags {
+    /// DEBUG-only launch arguments used by the simulator screenshot pipeline.
+    static func has(_ flag: String) -> Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains(flag)
+        #else
+        return false
+        #endif
+    }
 }

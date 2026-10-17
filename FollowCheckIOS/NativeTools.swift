@@ -431,7 +431,7 @@ extension NativeTool {
         NativeTool(id: "hashtag-radar", name: "Radar de hashtags", detail: "Encontra autores de publicações e prepara uma fila de follow totalmente revista.", category: "Descoberta", icon: "number", professional: false),
         NativeTool(id: "comment-dm", name: "Comentário → DM", detail: "Responde a palavras-chave e envia uma mensagem privada dentro da mesma ferramenta.", category: "Engagement", icon: "bubble.left.and.text.bubble.right", professional: true),
         NativeTool(id: "publish", name: "Publicar conteúdo", detail: "Publica ou agenda imagens, carrosséis, Reels e Stories com estado real.", category: "Conteúdo", icon: "square.and.arrow.up", professional: true),
-        NativeTool(id: "cleanup", name: "Cleanup", detail: "Revê following e followers, marca quem manter e remove a seleção completa.", category: "Audiência", icon: "person.2.badge.minus", professional: false),
+        NativeTool(id: "cleanup", name: "Limpeza", detail: "Revê quem segues e quem te segue, marca quem manter e limpa o resto.", category: "Audiência", icon: "person.2.badge.minus", professional: false),
         NativeTool(id: "follow", name: "Seguir perfis", detail: "Segue uma lista confirmada com fila, pausas, ETA e histórico por perfil.", category: "Crescimento", icon: "person.badge.plus", professional: false),
         NativeTool(id: "unfollow", name: "Deixar de seguir", detail: "Processa todos os selecionados; proteção por ritmo, não por cortes artificiais.", category: "Audiência", icon: "person.badge.minus", professional: false),
         NativeTool(id: "remove-followers", name: "Remover seguidores", detail: "Remove seguidores selecionados sem bloquear e atualiza a relação no fim.", category: "Audiência", icon: "person.crop.circle.badge.minus", professional: false),
@@ -523,7 +523,7 @@ struct ToolsView: View {
                             linkRow(icon: "list.bullet.rectangle", title: "Centro de operações", detail: "Filas de ações e o estado de cada perfil") {
                                 selected = NativeTool(id: "operations", name: "Centro de operações", detail: "", category: "Organização", icon: "list.bullet.rectangle", professional: false)
                             }
-                            linkRow(icon: "stethoscope", title: "Diagnóstico", detail: "Eventos técnicos, sem passwords nem cookies") { diagnostics = true }
+                            linkRow(icon: "stethoscope", title: "Diagnóstico", detail: "Eventos técnicos, sem dados sensíveis") { diagnostics = true }
                         }
                     }
                     VStack(alignment: .leading, spacing: 12) {
@@ -549,6 +549,7 @@ struct ToolsView: View {
             .frame(maxWidth: 760).frame(maxWidth: .infinity)
         }
         .background(Theme.canvas).scrollIndicators(.hidden)
+        .defaultScrollAnchor(PreviewFlags.has("--preview-tools-lower") ? .bottom : .top)
         .task { await store.load(); model.loadRelations() }
         .onAppear {
             #if DEBUG
@@ -627,6 +628,7 @@ struct ToolsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 62) }
     }
 
     private func row(_ tool: NativeTool) -> some View {
@@ -651,6 +653,7 @@ struct ToolsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.line).frame(height: 0.5).padding(.leading, 62) }
         .contextMenu { favoriteButton(tool) }
     }
 

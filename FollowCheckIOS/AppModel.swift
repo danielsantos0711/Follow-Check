@@ -245,7 +245,7 @@ final class AppModel {
             defaults.set(true,forKey:"followcheck.referencePacing.v219")
         }
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--preview-tools") { screen = .tools }
+        if ProcessInfo.processInfo.arguments.contains(where: { ["--preview-tools", "--preview-tools-lower"].contains($0) }) { screen = .tools }
         if ProcessInfo.processInfo.arguments.contains("--preview-cleanup") { screen = .tools }
         if ProcessInfo.processInfo.arguments.contains(where:{["--preview-intelligence","--preview-calendar","--preview-operations","--preview-memories"].contains($0)}) {screen = .tools}
         if ProcessInfo.processInfo.arguments.contains("--preview-relations") { screen = .relations }

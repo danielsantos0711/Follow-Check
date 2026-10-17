@@ -18,7 +18,7 @@ shoot() { # name appearance args...
   local name="$1" appearance="$2"; shift 2
   xcrun simctl ui "$device" appearance "$appearance"
   xcrun simctl terminate "$device" "$bundle" >/dev/null 2>&1 || true
-  xcrun simctl launch "$device" "$bundle" "$@" >/dev/null
+  xcrun simctl launch "$device" "$bundle" -AppleLanguages "(pt-PT)" -AppleLocale pt_PT "$@" >/dev/null
   sleep "${SHOT_DELAY:-6}"
   xcrun simctl io "$device" screenshot "$out/$name-$appearance.png" >/dev/null
   echo "captured $name-$appearance"

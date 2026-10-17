@@ -65,6 +65,7 @@ struct ContentView: View {
         }
         .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: model.notice)
         .sheet(isPresented: $settings) { SessionView(model: model) }
+        .onAppear { if PreviewFlags.has("--preview-settings") { settings = true } }
     }
 
     private var webVisible: Bool { model.screen == .instagram || (model.screen == .inbox && model.inboxWebMode) }
@@ -150,8 +151,10 @@ private struct HomeView: View {
                 header
                 CircleOverview(model: model)
                 CheckPanel(model: model)
-                news
-                shortcuts
+                if model.sessionAvailable || model.snapshot != nil {
+                    news
+                    shortcuts
+                }
                 Label("A sessão e os resultados ficam neste iPhone.", systemImage: "lock.fill")
                     .font(.footnote).foregroundStyle(Theme.ink3)
                     .frame(maxWidth: .infinity)
@@ -160,6 +163,7 @@ private struct HomeView: View {
             .frame(maxWidth: 640).frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
+        .defaultScrollAnchor(PreviewFlags.has("--preview-home-lower") ? .bottom : .top)
         .background(Theme.canvas)
         .refreshable { model.refreshState() }
         .sheet(item: $tool) { ToolDestination(model: model, tool: $0) }
@@ -264,9 +268,9 @@ private struct CircleOverview: View {
     private var segments: [RingSegment] {
         guard let snapshot else { return [] }
         return [
-            RingSegment(id: "mutual", value: Double(snapshot.mutuals), color: Theme.signal),
-            RingSegment(id: "out", value: Double(snapshot.nonFollowers), color: Theme.loss),
-            RingSegment(id: "in", value: Double(onlyFollowers), color: Theme.reach),
+            RingSegment(id: "mutual", value: Double(snapshot.mutuals), color: Theme.chartMutual),
+            RingSegment(id: "out", value: Double(snapshot.nonFollowers), color: Theme.chartOut),
+            RingSegment(id: "in", value: Double(onlyFollowers), color: Theme.chartIn),
         ]
     }
 
@@ -278,11 +282,14 @@ private struct CircleOverview: View {
                 .accessibilityElement(children: .combine)
             caption
             if snapshot != nil {
-                HStack(spacing: 8) {
-                    legend("Mútuos", snapshot?.mutuals, Theme.signal, filter: "Mútuos")
-                    legend("Não te seguem", snapshot?.nonFollowers, Theme.loss, filter: "Não me seguem")
-                    legend("Não segues", onlyFollowers, Theme.reach, filter: "Eu não sigo")
+                VStack(spacing: 0) {
+                    legend("Mútuos", "Seguem-se nos dois sentidos", snapshot?.mutuals, Theme.chartMutual, filter: "Mútuos")
+                    Divider().overlay(Theme.line).padding(.leading, 34)
+                    legend("Não te seguem", "Segues, mas não te seguem", snapshot?.nonFollowers, Theme.chartOut, filter: "Não me seguem")
+                    Divider().overlay(Theme.line).padding(.leading, 34)
+                    legend("Não segues", "Seguem-te, mas não segues", onlyFollowers, Theme.chartIn, filter: "Eu não sigo")
                 }
+                .background(Theme.raised, in: .rect(cornerRadius: 16, style: .continuous))
             }
         }
         .frame(maxWidth: .infinity)
@@ -332,25 +339,27 @@ private struct CircleOverview: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func legend(_ title: String, _ value: Int?, _ color: Color, filter: String) -> some View {
+    private func legend(_ title: String, _ detail: String, _ value: Int?, _ color: Color, filter: String) -> some View {
         Button {
             model.requestedRelationFilter = filter
             model.select(.relations)
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
-                    Text(title).font(.caption.weight(.medium)).foregroundStyle(Theme.ink2).lineLimit(1).minimumScaleFactor(0.8)
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous).fill(color).frame(width: 10, height: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                    Text(detail).font(.caption).foregroundStyle(Theme.ink2)
                 }
+                Spacer(minLength: 8)
                 Text(value.map { $0.formatted() } ?? "—")
                     .font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
                     .foregroundStyle(Theme.ink).contentTransition(.numericText())
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(Theme.raised, in: .rect(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(PressStyle())
+        .buttonStyle(.plain)
         .accessibilityLabel("\(title): \(value ?? 0)")
         .accessibilityHint("Abre a lista em Pessoas")
     }
@@ -399,7 +408,7 @@ private struct CheckPanel: View {
             .surface(padding: 18, fill: Theme.caution.opacity(0.08))
         } else if model.ownCheckRunning {
             HStack(spacing: 10) {
-                Button("Parar check", role: .destructive, action: model.cancelCurrentScan).buttonStyle(QuietButtonStyle(fill: true))
+                Button("Parar check", role: .destructive, action: model.cancelCurrentScan).buttonStyle(QuietButtonStyle(fill: true, tint: Theme.loss))
                 Button("Ver atividade") { model.select(.activity) }.buttonStyle(QuietButtonStyle(fill: true))
             }
         } else if model.paused {
@@ -615,7 +624,7 @@ struct WatchlistView: View {
             if let progress = model.watchProgress {
                 ProgressView(value: progress).tint(Theme.signalInk)
             }
-            Button("Parar este check", role: .destructive, action: model.cancelCurrentScan).buttonStyle(QuietButtonStyle())
+            Button("Parar este check", role: .destructive, action: model.cancelCurrentScan).buttonStyle(QuietButtonStyle(tint: Theme.loss))
         }
         .surface(padding: 16, radius: 20, fill: Theme.signal.opacity(0.08))
     }
@@ -671,23 +680,22 @@ struct WatchlistView: View {
             }
             .padding(.vertical, 10)
             .background(Theme.raised, in: .rect(cornerRadius: 14, style: .continuous))
-            Text(target.comparisonReady ? (changes.isEmpty ? "Sem mudanças no último check." : "\(changes.count) \(changes.count == 1 ? "mudança" : "mudanças") no último check.") : "A recolha ainda não foi validada contra os totais do perfil.")
-                .font(.footnote).foregroundStyle(Theme.ink2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(target.comparisonReady ? (changes.isEmpty ? "Sem mudanças no último check." : "\(changes.count) \(changes.count == 1 ? "mudança" : "mudanças") no último check.") : "A recolha ainda não foi validada contra os totais do perfil.")
+                    .font(.footnote).foregroundStyle(Theme.ink)
+                Text((target.lastSuccess.map { "Último check " + RelativeTime.short($0) } ?? "Sem check concluído") + " · a cada " + RelativeTime.interval(target.intervalMinutes))
+                    .font(.caption).foregroundStyle(Theme.ink2)
+            }
             if !target.error.isEmpty { InlineNotice(text: target.error) }
             HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let date = target.lastSuccess {
-                        Text(RelativeTime.short(date)).font(.footnote.weight(.medium)).foregroundStyle(Theme.ink)
-                    } else {
-                        Text("Sem check concluído").font(.footnote.weight(.medium)).foregroundStyle(Theme.ink)
-                    }
-                    Text("a cada \(RelativeTime.interval(target.intervalMinutes))").font(.caption).foregroundStyle(Theme.ink3)
+                Button { historyFilter = ""; history = target } label: { Label("Alterações", systemImage: "clock.arrow.circlepath") }
+                    .buttonStyle(QuietButtonStyle(fill: true))
+                Button { model.watchlist("run", args: ["targetId": target.id]) } label: {
+                    Label(model.activeCheckScope == "account" ? "Verificar a seguir" : "Verificar", systemImage: "arrow.triangle.2.circlepath")
+                        .frame(maxWidth: .infinity)
                 }
-                Spacer(minLength: 0)
-                Button("Alterações") { historyFilter = ""; history = target }.buttonStyle(QuietButtonStyle())
-                Button(model.activeCheckScope == "account" ? "Verificar a seguir" : "Verificar") { model.watchlist("run", args: ["targetId": target.id]) }
-                    .buttonStyle(ProminentButtonStyle())
-                    .disabled(!model.canScanWatchlist || model.watchlistBusy || target.running)
+                .buttonStyle(ProminentButtonStyle())
+                .disabled(!model.canScanWatchlist || model.watchlistBusy || target.running)
             }
         }
         .surface(padding: 16, radius: 22)

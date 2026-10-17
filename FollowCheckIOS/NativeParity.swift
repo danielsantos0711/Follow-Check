@@ -257,43 +257,63 @@ struct RelationshipIntelligence: View {
     }
     private var sources:some View {
         VStack(alignment:.leading,spacing:12) {
-            Label("Fontes da análise",systemImage:"square.stack.3d.up").font(.headline)
-            Button("Importar histórico Instagram · ZIP / JSON",systemImage:"square.and.arrow.down"){importing=true}
-            Text("ZIP até 1 GB · leitura por blocos no iPhone").font(.caption2).foregroundStyle(.secondary)
-            HStack {
-                Button("Memórias privadas",systemImage:"lock.rectangle.stack"){memories=true}
-                Spacer()
-                Button("Sincronizar conta profissional"){Task{await refresh("professional")}}
+            Eyebrow(text:"Fontes da análise")
+            Button {importing=true} label:{
+                HStack(spacing:12) {
+                    Image(systemName:"square.and.arrow.down").font(.system(size:16,weight:.semibold)).foregroundStyle(Theme.signalInk)
+                        .frame(width:36,height:36).background(Theme.signal.opacity(0.16),in:.rect(cornerRadius:10,style:.continuous))
+                    VStack(alignment:.leading,spacing:2) {
+                        Text("Importar histórico do Instagram").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        Text("ZIP ou JSON até 1 GB · lido por blocos neste iPhone").font(.caption).foregroundStyle(Theme.ink2)
+                    }
+                    Spacer(minLength:0)
+                    Image(systemName:"chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            LazyVGrid(columns:[GridItem(.flexible(),spacing:8),GridItem(.flexible(),spacing:8)],spacing:8) {
+                sourceButton("Memórias privadas","lock.rectangle.stack"){memories=true}
+                sourceButton("Conversas recentes","bubble.left.and.bubble.right"){Task{await refresh("conversations")}}
+                sourceButton("Gostos e comentários","heart.text.square"){Task{await refresh("engagement")}}
+                sourceButton("Conta profissional","briefcase"){Task{await refresh("professional")}}
                     .disabled(store.config["configured"] as? Bool != true)
-            }.font(.caption)
-            HStack {
-                Button("Conversas recentes"){Task{await refresh("conversations")}}
-                Spacer();Button("Gostos e comentários"){Task{await refresh("engagement")}}
-            }.font(.caption)
-            if let count=source["matchedProfiles"] as? Int {Text("Histórico associado a \(count) perfis").font(.caption).foregroundStyle(FCStyle.mint)}
-            Text("O histórico é analisado localmente. A ausência de sinais não prova ausência de relação.").font(.caption2).foregroundStyle(.secondary)
-        }.fcCard().disabled(loading)
+            }
+            if let count=source["matchedProfiles"] as? Int {Label("Histórico associado a \(count) perfis",systemImage:"checkmark.circle.fill").font(.footnote.weight(.semibold)).foregroundStyle(Theme.signalInk)}
+            Text("O histórico é analisado localmente. A ausência de sinais não prova ausência de relação.").font(.caption).foregroundStyle(Theme.ink2)
+        }.surface().disabled(loading)
+    }
+    private func sourceButton(_ title:String,_ icon:String,action:@escaping()->Void)->some View {
+        Button(action:action) {
+            Label(title,systemImage:icon).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ink).lineLimit(1).minimumScaleFactor(0.85)
+                .frame(maxWidth:.infinity,minHeight:40,alignment:.leading).padding(.horizontal,10)
+                .background(Theme.raised,in:.rect(cornerRadius:12,style:.continuous))
+        }.buttonStyle(PressStyle())
     }
     private var decisionsBar:some View {
         VStack(spacing:10) {
             HStack {
-                Text("2 · Escolher ação").font(.caption.bold());Spacer()
-                Button("Desfazer"){if let previous=undo.popLast(){Task{await store.save("relationship-decisions",previous)}}}.disabled(undo.isEmpty)
-                Button("Limpar"){selected=[]}
-            }
-            HStack {
-                Button("Manter"){decide("keep");selected=[]}
-                Button("Rever depois"){decide("review");selected=[]}
+                Eyebrow(text:"2 · Escolher ação")
                 Spacer()
-                Menu("Preparar ação") {
-                    Button("Verificar perfis selecionados"){Task{await refresh("verify")}}
-                    Button("Silenciar publicações e Stories"){action="mute";review=true}
-                    Button("Só deixar de seguir"){action="unfollow";review=true}
-                    Button("Só remover seguidor"){action="removeFollower";review=true}
-                    Button("Desligar nos dois sentidos"){action="disconnect";review=true}
-                }.buttonStyle(ProminentButtonStyle())
+                Button("Desfazer"){if let previous=undo.popLast(){Task{await store.save("relationship-decisions",previous)}}}.disabled(undo.isEmpty)
+                Button("Limpar"){selected=[]}.disabled(selected.isEmpty)
+            }.font(.footnote.weight(.semibold))
+            HStack(spacing:8) {
+                Button("Manter"){decide("keep");selected=[]}.buttonStyle(QuietButtonStyle())
+                Button("Rever depois"){decide("review");selected=[]}.buttonStyle(QuietButtonStyle())
+                Spacer(minLength:0)
+                Menu {
+                    Button("Verificar perfis selecionados",systemImage:"checkmark.shield"){Task{await refresh("verify")}}
+                    Button("Silenciar publicações e Stories",systemImage:"speaker.slash"){action="mute";review=true}
+                    Button("Só deixar de seguir",systemImage:"person.badge.minus"){action="unfollow";review=true}
+                    Button("Só remover seguidor",systemImage:"person.crop.circle.badge.minus"){action="removeFollower";review=true}
+                    Button("Desligar nos dois sentidos",systemImage:"arrow.left.arrow.right"){action="disconnect";review=true}
+                } label: {
+                    Label(chosen.isEmpty ? "Ação" : "Ação · \(chosen.count)",systemImage:"chevron.up").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(chosen.isEmpty ? Theme.ink3:Theme.onSignal).padding(.horizontal,16).frame(minHeight:44)
+                        .background(chosen.isEmpty ? Theme.sunken:Theme.signal,in:.rect(cornerRadius:14,style:.continuous))
+                }
             }.disabled(chosen.isEmpty || store.operationRunning)
-        }.font(.caption).padding(16).background(.ultraThinMaterial)
+        }.padding(.horizontal,20).padding(.vertical,12).background(.bar)
+        .overlay(alignment:.top){Rectangle().fill(Theme.line).frame(height:0.5)}
     }
     static let circles=["close":"Círculo próximo","active":"Ligação ativa","occasional":"Contacto ocasional","weak":"Ligação fraca","dormant":"Ligação adormecida","none":"Sem contacto","unknown":"Dados insuficientes"]
 }
