@@ -55,6 +55,11 @@ const GLOBAL_SAFETY_KEY = "followcheck:global-safety:v1";
 const GLOBAL_SAFETY_MIGRATION_KEY = "followcheck:global-safety:migration:v1";
 const GLOBAL_SAFETY_VERSION = 2;
 const GLOBAL_THROTTLE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// After an Instagram limit without an explicit deadline (spam flag,
+// feedback_required) no local preference may resume requests sooner than this.
+// An explicit Retry-After from the server is authoritative instead.
+const THROTTLE_MIN_COOLDOWN_MS = 60 * 60 * 1000;
+const THROTTLE_REASONS = ["rate_limited", "soft_throttle", "http_429"];
 const GLOBAL_SCAN_BUDGET_KEY = "followcheck:global-scan-budget:v1";
 const MONITOR_PACING_SETTINGS_KEY = "followcheck:monitor-pacing:v1";
 const avatarCache = new Map();
@@ -208,6 +213,8 @@ async function tripGlobalSafety(reason, message, options = {}) {
     const stored = await chrome.storage.local.get('followcheck:ios:cooldown-minutes:v1');
     const minutes = Number(stored['followcheck:ios:cooldown-minutes:v1'] ?? 1440);
     localDuration = (Number.isFinite(minutes) ? Math.max(1, Math.min(1440, minutes)) : 1440) * 60000;
+    // Without an explicit server deadline (a spam flag), keep the minimum pause.
+    if (THROTTLE_REASONS.includes(String(reason || "")) && !(Number(options.serverCooldownUntil) > Date.now())) localDuration = Math.max(localDuration, THROTTLE_MIN_COOLDOWN_MS);
   }
   const serverCooldownUntil = Math.max(previous.serverCooldownUntil, Number(options.serverCooldownUntil || 0));
   const requestedUntil = globalThis.__FOLLOWCHECK_IOS_SHELL__ ? Date.now() + localDuration : Number(options.cooldownUntil || Date.now() + localDuration);
@@ -1933,6 +1940,19 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
       return verified;
     }
     if (knownTotal === null || result.coverageComplete || result.pass >= 2) return result;
+    // Instagram served the full row count but repeated a significant share of
+    // the accounts: its own ordering shuffles this list, so another traversal
+    // cannot converge and would only double the requests. Report the visible
+    // observation honestly instead of retrying.
+    if (watchlistOrderingUnstable(result, knownTotal)) {
+      postMonitorDiagnostic(profileId, "ordering_unstable", {
+        list: kind, observed: result.users.length, expected: knownTotal,
+        receivedUsers: result.receivedUsers, duplicates: result.duplicates,
+      });
+      iosListCheckpoints.delete(checkpointKey);
+      await persistIOSListCheckpoints();
+      return {...result, orderingUnstable: true, validationMode: "partial-observation"};
+    }
     if (typeof options.recheckExpected === "function") {
       const fresh = await options.recheckExpected();
       if (!Number.isSafeInteger(fresh) || fresh < 0) throw monitorFailure("O perfil não confirmou um total exato após a leitura.","watch_counts_unavailable");
@@ -1957,6 +1977,12 @@ async function monitorCollectList(kind, userId, profileId, rangeStart, rangeEnd,
     await monitorSleep(Math.max(10000, activeMonitorPacing.pageDelayMaxMs));
     globalThis.__FOLLOWCHECK_IOS_ASSERT_ACTIVE__?.();
   }
+}
+
+function watchlistOrderingUnstable(result, knownTotal) {
+  if (result?.terminal !== true || !Number.isSafeInteger(knownTotal) || knownTotal <= 0) return false;
+  const observed = Number(result.users?.length || 0), duplicates = Number(result.duplicates || 0);
+  return observed < knownTotal && duplicates >= Math.max(3, Math.ceil(Number(result.receivedUsers || 0) * 0.02));
 }
 
 async function monitorCollectListPass(kind, userId, profileId, rangeStart, rangeEnd, viewerUserId = userId, options = {}) {
@@ -2873,6 +2899,9 @@ function sameMonitorIdentitySet(left,right) {
 function watchlistListProof(result,reported) {
   const observed=result?.users?.length;
   if (result?.terminal !== true || !Number.isSafeInteger(reported) || reported < 0) return null;
+  if (result.orderingUnstable === true && watchlistOrderingUnstable(result, reported)) {
+    return {mode:"partial-observation",terminal:true,observed,reported,duplicates:Number(result.duplicates||0),receivedUsers:Number(result.receivedUsers||0)};
+  }
   if (observed === reported) return {mode:"count-matched",terminal:true,observed,reported};
   if (observed > reported && result.enumerationVerified === true && result.validationMode === "stable-surplus" && result.independentPasses === 2 &&
       result.duplicates === 0 && sameMonitorIdentitySet(result.stableIdentityIds,result.users.map(user=>String(user.id)))) {
@@ -2886,11 +2915,33 @@ function assertWatchlistCoverage(before,after,followers,following,lists=null) {
   if (before.reportedFollowers!==after.reportedFollowers || before.reportedFollowing!==after.reportedFollowing ||
       !Number.isSafeInteger(after.reportedFollowers) || after.reportedFollowers < 0 || !Number.isSafeInteger(after.reportedFollowing) || after.reportedFollowing < 0 ||
       (lists ? lists.followers?.users?.length !== followers || lists.following?.users?.length !== following ||
-        !watchlistListProof(lists.followers,after.reportedFollowers) || !watchlistListProof(lists.following,after.reportedFollowing) :
+        !watchlistListProof(lists.followers,after.reportedFollowers) || !watchlistListProof(lists.following,after.reportedFollowing) ||
+        [watchlistListProof(lists.followers,after.reportedFollowers),watchlistListProof(lists.following,after.reportedFollowing)].every(proof=>proof.mode==="partial-observation") :
         followers!==after.reportedFollowers || following!==after.reportedFollowing)) {
     const error=monitorFailure(`Leitura parcial: ${followers}/${after.reportedFollowers ?? '?'} seguidores e ${following}/${after.reportedFollowing ?? '?'} a seguir. Não foram calculadas mudanças.`,"watch_coverage_incomplete");
     error.coverage=coverage;throw error;
   }
+}
+
+// Comparison version 5 validates each list on its own: a list carries its own
+// proof and reported total, and a partial observation is never a reference.
+function watchlistReferenceLists(snapshot, viewer, target) {
+  if (!snapshot || snapshot.complete !== true || String(snapshot.viewerUserId) !== String(viewer) || String(snapshot.target?.id) !== String(target)) return null;
+  if ([3,4].includes(snapshot.comparisonVersion)) {
+    const valid=validWatchlistComparisonSnapshot(snapshot,viewer,target);
+    return valid ? {followers:true,following:true} : null;
+  }
+  if (snapshot.comparisonVersion !== 5) return null;
+  const usable={};
+  for (const kind of ['followers','following']) {
+    const proof=snapshot.listValidation?.[kind],users=snapshot[kind];
+    usable[kind]=false;
+    if (!proof || proof.terminal!==true || !Array.isArray(users) || proof.observed!==users.length || !Number.isSafeInteger(proof.reported) || proof.reported<0) continue;
+    if (!users.every(user => /^\d{1,32}$/.test(String(user?.id || ''))) || new Set(users.map(user=>String(user.id))).size!==users.length) continue;
+    if (proof.mode==='count-matched') usable[kind]=users.length===proof.reported;
+    else if (proof.mode==='stable-surplus') usable[kind]=users.length>proof.reported && proof.independentPasses===2 && sameMonitorIdentitySet(proof.stableIdentityIds,users.map(user=>String(user.id)));
+  }
+  return usable.followers || usable.following ? usable : null;
 }
 
 function validWatchlistComparisonSnapshot(snapshot, viewer, target) {
@@ -2995,6 +3046,8 @@ async function completeWatchlistTarget(ownerId, targetId, result) {
     coverageVerified: result.coverageVerified !== false,
     enumerationVerified: true,
     coverageWarnings: result.coverageWarnings || [],
+    partialLists: result.partialLists || {followers:null,following:null},
+    comparedLists: result.comparedLists || null,
     reportedFollowers: result.reportedCounts?.followers ?? null,
     reportedFollowing: result.reportedCounts?.following ?? null,
     lastAttemptCoverage: null,
@@ -3484,7 +3537,7 @@ async function runNativeWatchlistScan(message = {}) {
       return target[kind === "following" ? "reportedFollowing" : "reportedFollowers"];
     };
     const assertCollectedCoverage = (kind,result) => {
-      if(result.coverageComplete !== false || result.enumerationVerified === true)return;
+      if(result.coverageComplete !== false || result.enumerationVerified === true || result.orderingUnstable === true)return;
       const expected=kind === "following" ? target.reportedFollowing : target.reportedFollowers;
       const error=monitorFailure(`A lista de ${kind === "following" ? "contas seguidas" : "seguidores"} terminou com ${result.users.length} identidades únicas; o perfil anuncia ${expected}. A comparação foi interrompida sem voltar a repetir a lista.`,"watch_coverage_incomplete");
       error.coverage={list:kind,collected:result.users.length,reported:expected,duplicates:result.duplicates||0};
@@ -3512,21 +3565,29 @@ async function runNativeWatchlistScan(message = {}) {
     await backgroundLog("info", "watchlist", "coverage", "Comparação entre identidades recolhidas e totais do perfil.", {checkId, collectedFollowers:followers.length,collectedFollowing:following.length,beforeFollowers:target.reportedFollowers,beforeFollowing:target.reportedFollowing,afterFollowers:finalTarget.reportedFollowers,afterFollowing:finalTarget.reportedFollowing});
     assertWatchlistCoverage(target,finalTarget,followers.length,following.length,{followers:followerResult,following:followingResult});
     const listValidation={followers:watchlistListProof(followerResult,finalTarget.reportedFollowers),following:watchlistListProof(followingResult,finalTarget.reportedFollowing)};
+    const partial={followers:listValidation.followers.mode==='partial-observation',following:listValidation.following.mode==='partial-observation'};
     const countVerified=Object.values(listValidation).every(proof=>proof.mode==='count-matched');
     const coverageWarnings=['followers','following'].filter(kind=>listValidation[kind].mode==='stable-surplus').map(kind=>
       `${kind==='following'?'Contas seguidas':'Seguidores'}: ${listValidation[kind].observed} identidades observadas em duas recolhas iguais; contador do perfil: ${listValidation[kind].reported}.`);
     const storageKey = watchlistStorageKey(viewerUserId, target.id);
     const stored = await chrome.storage.local.get(storageKey).catch(() => ({}));
     const candidate = stored?.[storageKey] || null;
-    const previous = validWatchlistComparisonSnapshot(candidate,viewerUserId,target.id) ? candidate : null;
-    await backgroundLog("info", "watchlist", "comparison-reference", "Referência de comparação avaliada.", {checkId, savedReferencePresent:!!candidate, referenceAccepted:!!previous, baselineOnly:!previous});
-    const followerDelta = previous ? monitorChanges(previous.followers || [], followers) : { added: [], removed: [] };
-    const followingDelta = previous ? monitorChanges(previous.following || [], following) : { added: [], removed: [] };
+    const usable = watchlistReferenceLists(candidate,viewerUserId,target.id);
+    const previous = usable ? candidate : null;
+    await backgroundLog("info", "watchlist", "comparison-reference", "Referência de comparação avaliada.", {checkId, savedReferencePresent:!!candidate, referenceAccepted:!!previous, followersReference:!!usable?.followers, followingReference:!!usable?.following, partialFollowers:partial.followers, partialFollowing:partial.following, baselineOnly:!previous});
+    for (const kind of ['followers','following'].filter(kind=>partial[kind])) {
+      await backgroundLog("warn","watchlist","list-partial",`${kind==='following'?'Contas seguidas':'Seguidores'}: ${listValidation[kind].observed} de ${listValidation[kind].reported} visíveis. O Instagram repetiu ${listValidation[kind].duplicates} perfis nesta lista; as saídas não foram calculadas.`,
+        {checkId,list:kind,observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates,referenceKept:!!usable?.[kind]});
+    }
+    // A list is compared only when both the reference and this observation are proven.
+    const compare={followers:!!usable?.followers && !partial.followers,following:!!usable?.following && !partial.following};
+    const followerDelta = compare.followers ? monitorChanges(previous.followers || [], followers) : { added: [], removed: [] };
+    const followingDelta = compare.following ? monitorChanges(previous.following || [], following) : { added: [], removed: [] };
     const followerIds = new Set(followers.map((user) => String(user.id)));
     const followingIds = new Set(following.map((user) => String(user.id)));
 
     postMonitorProgress(profileId, `Watchlist · @${target.username}`, "A confirmar as alterações antes de alertar", 92);
-    const lostFollowers = previous
+    const lostFollowers = compare.followers
       ? await classifyWatchlistRemoved(
           followerDelta.removed,
           followerIds,
@@ -3534,7 +3595,7 @@ async function runNativeWatchlistScan(message = {}) {
           "followers",
         )
       : { confirmed: [], unavailable: [], pending: [] };
-    const stoppedFollowing = previous
+    const stoppedFollowing = compare.following
       ? await classifyWatchlistRemoved(
           followingDelta.removed,
           followingIds,
@@ -3544,18 +3605,33 @@ async function runNativeWatchlistScan(message = {}) {
       : { confirmed: [], unavailable: [], pending: [] };
     const profileChanges = watchlistProfileChanges(previous?.target || null, target);
     const completedAt = Date.now();
+    // A partial list keeps the last proven reference for that list, so the next
+    // complete observation still compares against something real.
+    const carriedProof = kind => {
+      if (previous.comparisonVersion === 5) return previous.listValidation[kind];
+      return previous.comparisonVersion === 4 ? {...previous.listValidation[kind], reported: previous.target[kind === 'followers' ? 'reportedFollowers' : 'reportedFollowing']}
+        : {mode:'count-matched',terminal:true,observed:previous[kind].length,reported:previous[kind].length};
+    };
+    const reference = {};
+    for (const kind of ['followers','following']) {
+      const current = kind === 'followers' ? followers : following;
+      reference[kind] = partial[kind] && usable?.[kind]
+        ? {users: previous[kind], proof: carriedProof(kind), pending: kind === 'followers' ? previous.pendingRemovedFollowers || [] : previous.pendingStoppedFollowing || []}
+        : {users: current, proof: listValidation[kind], pending: kind === 'followers' ? lostFollowers.pending : stoppedFollowing.pending};
+    }
     globalThis.__FOLLOWCHECK_IOS_ASSERT_ACTIVE__?.();
     await chrome.storage.local.set({
       [storageKey]: {
         version: 2,
-        comparisonVersion: 4,
-        listValidation,
+        comparisonVersion: 5,
+        listValidation: {followers: reference.followers.proof, following: reference.following.proof},
+        observations: {followers: listValidation.followers, following: listValidation.following, at: completedAt},
         viewerUserId: String(viewerUserId),
         target,
-        followers,
-        following,
-        pendingRemovedFollowers: lostFollowers.pending,
-        pendingStoppedFollowing: stoppedFollowing.pending,
+        followers: reference.followers.users,
+        following: reference.following.users,
+        pendingRemovedFollowers: reference.followers.pending,
+        pendingStoppedFollowing: reference.following.pending,
         completedAt,
         complete: true,
       },
@@ -3564,8 +3640,10 @@ async function runNativeWatchlistScan(message = {}) {
 
     const result = {
       event: "watchlist_result",
-      comparisonVerified: Boolean(previous),
+      comparisonVerified: compare.followers || compare.following,
       coverageVerified: countVerified,
+      partialLists: Object.fromEntries(['followers','following'].map(kind=>[kind,partial[kind] ? {observed:listValidation[kind].observed,reported:listValidation[kind].reported,duplicates:listValidation[kind].duplicates} : null])),
+      comparedLists: compare,
       enumerationVerified: true,
       coverageWarnings,
       reportedCounts:{followers:finalTarget.reportedFollowers,following:finalTarget.reportedFollowing},

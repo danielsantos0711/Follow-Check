@@ -129,11 +129,14 @@ test('Reported 1172 / raw 1171 / unique 924 reproduces the diagnostic with no fa
    return page(ids,i<46,i<46?`cursor-${i+1}`:null);
  };
  const result=await collect(e,1172);
- assert.equal(calls,94);assert.equal(result.users.length,924);assert.equal(result.receivedUsers,1171);assert.equal(result.duplicates,247);
- assert.equal(result.coverageComplete,false);assert.equal(result.pass,2);
- assert.equal(e.ctx.diagnostics.filter(x=>x.event==='transport_success').length,0);
+ // 2.6: a list that repeats a large share of accounts is shuffled by Instagram;
+ // a second traversal cannot converge, so it is reported once as partial.
+ assert.equal(calls,47);assert.equal(result.users.length,924);assert.equal(result.receivedUsers,1171);assert.equal(result.duplicates,247);
+ assert.equal(result.coverageComplete,false);assert.equal(result.pass,1);assert.equal(result.orderingUnstable,true);assert.equal(result.validationMode,'partial-observation');
+ assert.equal(e.ctx.diagnostics.filter(x=>x.event==='transport_success').length,0);assert.equal(e.ctx.diagnostics.filter(x=>x.event==='coverage_retry').length,0);
  const last=e.ctx.diagnostics.filter(x=>x.event==='list_coverage_incomplete').at(-1).meta;
  assert.equal(last.expected,1172);assert.equal(last.duplicates,247);
+ assert.equal(e.ctx.diagnostics.filter(x=>x.event==='ordering_unstable').length,1);
 });
 test('A one-account shortfall is still incomplete after the single recovery',async()=>{
  const e=collector();let calls=0;e.ctx.monitorFetchPage=async()=>{calls++;return page(Array.from({length:342},(_,n)=>n+1));};
@@ -392,7 +395,7 @@ test('The build 30 fixture completes through HTTP, native bridge and registry wi
  assert.ok(requests.every(r=>r.query.every(k=>['count','search_surface','max_id'].includes(k))));
  assert.deepEqual(pauses,[15,30,45,60]);assert.ok(progress.some(p=>p.title==='Pausa entre listas'));
  const snapshot=e.memory['followcheck:watchlist:v1:42:99'];
- assert.equal(snapshot.comparisonVersion,4);assert.equal(snapshot.complete,true);assert.equal(snapshot.target.reportedFollowing,343);
+ assert.equal(snapshot.comparisonVersion,5);assert.equal(snapshot.complete,true);assert.equal(snapshot.target.reportedFollowing,343);assert.equal(snapshot.listValidation.following.reported,343);
  assert.equal(snapshot.listValidation.following.mode,'stable-surplus');assert.equal(snapshot.listValidation.following.independentPasses,2);
  assert.equal(snapshot.listValidation.followers.mode,'count-matched');
  const target=state.targets[0];assert.equal(target.baselineReady,true);assert.equal(target.lastErrorCode,'',target.lastError);assert.equal(target.lastChangeCount,0);

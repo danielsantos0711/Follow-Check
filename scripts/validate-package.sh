@@ -8,7 +8,7 @@ for name in ios-polyfill ios-policy ios-engine ios-theme profile-reader backgrou
 done
 node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync("FollowCheckIOS/Extension/manifest.json","utf8"));if(m.version!=="10.20.8")throw Error("Unexpected upstream engine");'
 # Engine 2.5.11: pagination, stable-surplus validation, checkpoints v4.
-node --test tests/engine/runtime-regression.mjs tests/engine/watchlist-pagination.mjs
+node --test tests/engine/runtime-regression.mjs tests/engine/watchlist-pagination.mjs tests/engine/watchlist-partial.mjs
 # Native 2.5.9 suites, run against the integrated engine.
 node tests/native-2.5.9/bootstrap-policy.mjs
 node tests/native-2.5.9/original-core.cjs
