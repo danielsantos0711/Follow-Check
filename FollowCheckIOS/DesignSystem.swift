@@ -54,16 +54,6 @@ enum Tone {
     }
 }
 
-// Compatibility facade for screens that still reference the original style names.
-enum FCStyle {
-    static let background = Theme.canvas
-    static let card = Theme.surface
-    static let accent = Theme.signalInk
-    static let mint = Theme.signalInk
-    static let pink = Theme.loss
-    static let gradient = LinearGradient(colors: [Theme.signal, Theme.signal], startPoint: .leading, endPoint: .trailing)
-}
-
 // MARK: - Surfaces
 
 struct SurfaceModifier: ViewModifier {
@@ -81,7 +71,6 @@ extension View {
     func surface(padding: CGFloat = 16, radius: CGFloat = 20, fill: Color = Theme.surface) -> some View {
         modifier(SurfaceModifier(padding: padding, radius: radius, fill: fill))
     }
-    func fcCard() -> some View { surface() }
     /// Grouped forms on the brand canvas.
     func fcForm() -> some View {
         scrollContentBackground(.hidden).background(Theme.canvas)
@@ -419,76 +408,109 @@ enum RelationFilter {
     }
 }
 
-// MARK: - Signature: the reciprocity ring
+// MARK: - Signature: the circle Venn
 
-struct RingSegment: Identifiable {
-    let id: String
-    let value: Double
-    let color: Color
-}
-
-/// A ring split by relationship type. While a check runs it becomes a progress ring.
-struct ReciprocityRing<Center: View>: View {
-    let segments: [RingSegment]
-    var running = false
-    var progress: Double? = nil
-    var lineWidth: CGFloat = 16
-    @ViewBuilder var center: () -> Center
+/// Your circle as two overlapping discs: who follows you (left) and who you follow (right).
+/// Areas follow the counts; the shared lens is the mutual group. Matches the app icon.
+struct CircleVenn: View {
+    let followers: Int
+    let following: Int
+    let mutuals: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var drawn = false
+    @State private var joined = false
 
-    private struct Arc: Identifiable {
-        let id: String
-        let color: Color
-        let from: Double
-        let to: Double
+    struct Layout {
+        let leftRadius: CGFloat
+        let rightRadius: CGFloat
+        let distance: CGFloat
+        let leftCenter: CGFloat
+        var rightCenter: CGFloat { leftCenter + distance }
+        /// Horizontal span of the shared lens.
+        var lensWidth: CGFloat { max(0, min(leftCenter + leftRadius, rightCenter + rightRadius) - max(leftCenter - leftRadius, rightCenter - rightRadius)) }
+        var lensMid: CGFloat { (max(leftCenter - leftRadius, rightCenter - rightRadius) + min(leftCenter + leftRadius, rightCenter + rightRadius)) / 2 }
     }
 
-    private var arcs: [Arc] {
-        let visible = segments.filter { $0.value > 0 }
-        let total = visible.reduce(0.0) { $0 + $1.value }
-        guard total > 0 else { return [] }
-        let gap = visible.count > 1 ? 0.006 : 0.0
-        var result: [Arc] = []
-        var start = 0.0
-        for segment in visible {
-            let span = segment.value / total
-            result.append(Arc(id: segment.id, color: segment.color, from: start + gap, to: max(start + gap, start + span - gap)))
-            start += span
+    static func overlapArea(_ r1: Double, _ r2: Double, _ d: Double) -> Double {
+        if d >= r1 + r2 { return 0 }
+        if d <= abs(r1 - r2) { return .pi * pow(min(r1, r2), 2) }
+        let a = r1 * r1 * acos((d * d + r1 * r1 - r2 * r2) / (2 * d * r1))
+        let b = r2 * r2 * acos((d * d + r2 * r2 - r1 * r1) / (2 * d * r2))
+        let c = 0.5 * sqrt(max(0, (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)))
+        return a + b - c
+    }
+
+    static func layout(followers: Int, following: Int, mutuals: Int, in size: CGSize) -> Layout {
+        let big = Double(max(followers, following, 1))
+        // Area-true radii, with a floor so a small group stays visible and labelled.
+        var r1 = sqrt(Double(max(followers, 0)) / big), r2 = sqrt(Double(max(following, 0)) / big)
+        r1 = max(r1, 0.42); r2 = max(r2, 0.42)
+        let small = min(r1, r2)
+        let fraction = min(1, Double(max(mutuals, 0)) / Double(max(min(followers, following), 1)))
+        let target = fraction * .pi * small * small
+        var low = abs(r1 - r2), high = r1 + r2
+        for _ in 0..<48 {
+            let mid = (low + high) / 2
+            if overlapArea(r1, r2, mid) > target { low = mid } else { high = mid }
         }
-        return result
+        var d = (low + high) / 2
+        // Keep a sliver of each one-way group visible when it is not empty.
+        let oneWayLeft = followers - mutuals, oneWayRight = following - mutuals
+        if oneWayLeft > 0 || oneWayRight > 0 { d = max(d, abs(r1 - r2) + small * 0.18) }
+        let width = r1 + d + r2, height = 2 * max(r1, r2)
+        let scale = min(Double(size.width) / width, Double(size.height) / height)
+        let used = width * scale
+        return Layout(leftRadius: r1 * scale, rightRadius: r2 * scale, distance: d * scale,
+                      leftCenter: (Double(size.width) - used) / 2 + r1 * scale)
     }
 
     var body: some View {
-        ZStack {
-            Circle().stroke(Theme.sunken, lineWidth: lineWidth)
-            if running {
-                if let progress {
-                    Circle().trim(from: 0, to: max(0.02, min(1, progress)))
-                        .stroke(Theme.signal, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: progress)
-                } else {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || scenePhase != .active)) { context in
-                        let turn = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
-                        Circle().trim(from: 0, to: 0.22)
-                            .stroke(Theme.signal, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                            .rotationEffect(.degrees(turn * 360 - 90))
-                    }
+        GeometryReader { proxy in
+            let l = Self.layout(followers: followers, following: following, mutuals: mutuals, in: proxy.size)
+            let apart = joined ? 0 : max(0, l.leftRadius + l.rightRadius - l.distance) / 2 + 6
+            let midY = proxy.size.height / 2
+            ZStack(alignment: .topLeading) {
+                Circle().fill(Theme.chartIn.opacity(0.2))
+                    .frame(width: l.leftRadius * 2, height: l.leftRadius * 2)
+                    .position(x: l.leftCenter - apart, y: midY)
+                Circle().fill(Theme.chartOut.opacity(0.2))
+                    .frame(width: l.rightRadius * 2, height: l.rightRadius * 2)
+                    .position(x: l.rightCenter + apart, y: midY)
+                ZStack {
+                    Circle().fill(Theme.signal)
+                        .frame(width: l.rightRadius * 2, height: l.rightRadius * 2)
+                        .position(x: l.rightCenter + apart, y: midY)
                 }
-            } else {
-                ForEach(arcs) { arc in
-                    Circle().trim(from: arc.from, to: drawn ? arc.to : arc.from)
-                        .stroke(arc.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
-                        .rotationEffect(.degrees(-90))
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .mask {
+                    ZStack {
+                        Circle().frame(width: l.leftRadius * 2, height: l.leftRadius * 2)
+                            .position(x: l.leftCenter - apart, y: midY)
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                Circle().strokeBorder(Theme.ink, lineWidth: 2)
+                    .frame(width: l.leftRadius * 2, height: l.leftRadius * 2)
+                    .position(x: l.leftCenter - apart, y: midY)
+                Circle().strokeBorder(Theme.ink, lineWidth: 2)
+                    .frame(width: l.rightRadius * 2, height: l.rightRadius * 2)
+                    .position(x: l.rightCenter + apart, y: midY)
+                if l.lensWidth >= 58 && joined {
+                    VStack(spacing: 0) {
+                        Text(mutuals.formatted()).font(.system(size: min(30, l.lensWidth * 0.3), weight: .bold, design: .rounded)).monospacedDigit()
+                        Text("mútuos").font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(Theme.onSignal)
+                    .minimumScaleFactor(0.6).lineLimit(1)
+                    .frame(width: l.lensWidth - 12)
+                    .position(x: l.lensMid, y: midY)
+                    .transition(.opacity)
                 }
             }
-            center().padding(lineWidth + 12)
         }
-        .aspectRatio(1, contentMode: .fit)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(followers.formatted()) seguem-te, segues \(following.formatted()), \(mutuals.formatted()) mútuos")
         .onAppear {
-            if reduceMotion { drawn = true } else { withAnimation(.easeOut(duration: 0.9).delay(0.1)) { drawn = true } }
+            if reduceMotion { joined = true } else { withAnimation(.spring(response: 0.9, dampingFraction: 0.78).delay(0.15)) { joined = true } }
         }
     }
 }

@@ -3,10 +3,13 @@ import Observation
 import SwiftUI
 import UserNotifications
 
+/// Native state for the whole app. The JavaScript engine is the source of truth for
+/// Instagram data; this model mirrors what it publishes and sends it commands.
 @MainActor @Observable
 final class AppModel {
     enum Phase: Equatable { case starting, loadingInstagram, ready, failed(String) }
-    enum Screen: String, CaseIterable { case home, relations, inbox, watchlist, activity, tools, instagram }
+    enum Screen: String, CaseIterable { case home, people, watchlist, activity, settings, instagram }
+
     struct DiagnosticEvent: Identifiable, Codable {
         var id = UUID().uuidString
         var date = Date()
@@ -32,9 +35,20 @@ final class AppModel {
             lastScanAt = value["lastScanAt"] as? String ?? ""
         }
     }
+    /// One list of a watched profile that Instagram served only partially.
+    struct PartialList: Equatable {
+        let observed: Int
+        let reported: Int
+        init?(_ value: Any?) {
+            guard let value = value as? [String: Any], let observed = (value["observed"] as? NSNumber)?.intValue,
+                  let reported = (value["reported"] as? NSNumber)?.intValue else { return nil }
+            self.observed = observed; self.reported = reported
+        }
+    }
     struct WatchTarget: Identifiable {
         let id: String
         let username: String
+        let fullName: String
         let enabled: Bool
         let photoURL: String
         let running: Bool
@@ -42,23 +56,38 @@ final class AppModel {
         let comparisonReady: Bool
         let followers: Int
         let following: Int
+        let reportedFollowers: Int?
+        let reportedFollowing: Int?
+        let partialFollowers: PartialList?
+        let partialFollowing: PartialList?
         let intervalMinutes: Int
         let lastSuccess: Date?
+        let nextRun: Date?
         let error: String
+        let errorCode: String
         init(_ v: [String: Any]) {
             id = v["id"] as? String ?? ""
             username = v["username"] as? String ?? ""
+            fullName = v["fullName"] as? String ?? ""
             photoURL = v["profilePicUrl"] as? String ?? v["profile_pic_url"] as? String ?? ""
             enabled = v["enabled"] as? Bool ?? false
             running = v["running"] as? Bool ?? false
             baselineReady = v["baselineReady"] as? Bool ?? false
-            comparisonReady = v["coverageVerified"] as? Bool == true && (v["lastError"] as? String ?? "").isEmpty
+            let partial = v["partialLists"] as? [String: Any] ?? [:]
+            partialFollowers = PartialList(partial["followers"])
+            partialFollowing = PartialList(partial["following"])
+            comparisonReady = baselineReady && (v["lastError"] as? String ?? "").isEmpty
             followers = (v["followers"] as? NSNumber)?.intValue ?? 0
             following = (v["following"] as? NSNumber)?.intValue ?? 0
+            reportedFollowers = (v["reportedFollowers"] as? NSNumber)?.intValue
+            reportedFollowing = (v["reportedFollowing"] as? NSNumber)?.intValue
             intervalMinutes = (v["intervalMinutes"] as? NSNumber)?.intValue ?? 1440
             let ms = (v["lastSuccessAt"] as? NSNumber)?.doubleValue ?? 0
             lastSuccess = ms > 0 ? Date(timeIntervalSince1970: ms / 1000) : nil
+            let next = (v["nextRunAt"] as? NSNumber)?.doubleValue ?? 0
+            nextRun = next > 0 ? Date(timeIntervalSince1970: next / 1000) : nil
             error = AppModel.redact(v["lastError"] as? String ?? "")
+            errorCode = v["lastErrorCode"] as? String ?? ""
         }
     }
     struct Relation: Identifiable {
@@ -96,30 +125,6 @@ final class AppModel {
             following = v["following"] as? Bool ?? false
         }
     }
-    struct Conversation: Identifiable {
-        let id: String
-        let title: String
-        let preview: String
-        let photoURL: String
-        init(_ v: [String: Any]) {
-            id = String(describing: v["thread_id"] ?? v["id"] ?? "")
-            let users = v["users"] as? [[String: Any]] ?? []
-            let names = users.compactMap { $0["username"] as? String }.joined(separator: ", ")
-            title = (v["thread_title"] as? String ?? v["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? names
-            preview = v["lastMessage"] as? String ?? ((v["items"] as? [[String: Any]])?.first?["text"] as? String) ?? "Abrir conversa"
-            photoURL = v["imageUrl"] as? String ?? users.first?["profile_pic_url"] as? String ?? ""
-        }
-    }
-    struct DirectMessage: Identifiable {
-        let id: String
-        let text: String
-        let own: Bool
-        init(_ v: [String: Any], owner: String) {
-            id = String(describing: v["item_id"] ?? "")
-            text = v["text"] as? String ?? "Conteúdo multimédia · disponível no Instagram"
-            own = String(describing: v["user_id"] ?? "") == owner
-        }
-    }
     struct WatchEvent: Identifiable {
         let id: String
         let targetId: String
@@ -143,7 +148,7 @@ final class AppModel {
             fullName=value["fullName"] as? String ?? ""
             photoURL=value["profilePicUrl"] as? String ?? ""
             type=value["type"] as? String ?? ""
-            comparisonVerified=value["coverageVerified"] as? Bool ?? false
+            comparisonVerified=value["coverageVerified"] as? Bool ?? value["comparisonVerified"] as? Bool ?? false
             date=Date(timeIntervalSince1970:((value["timestamp"] as? NSNumber)?.doubleValue ?? 0)/1000)
         }
     }
@@ -160,16 +165,6 @@ final class AppModel {
     var watchlistListTarget = ""
     var watchlistListRelation = "followers"
     var watchlistListMore = false
-    var conversations: [Conversation] = []
-    var directMessages: [DirectMessage] = []
-    var inboxLoading = false
-    var inboxKind = "inbox"
-    var inboxCursor = ""
-    var inboxHasMore = false
-    var inboxLoaded = false
-    var inboxUnavailable = false
-    var inboxWebMode = false
-    var openThread = ""
     var relations: [Relation] = []
     var relationsReady = false
     var relationsLoading = false
@@ -187,6 +182,7 @@ final class AppModel {
     @ObservationIgnored lazy var tools = NativeToolsStore(model: self)
     var phase: Phase = .starting
     var screen: Screen = .home
+    /// The People lens to open next (set by the Home legend).
     var requestedRelationFilter = "Não me seguem"
     var statusText = "A recuperar a tua sessão"
     var legacyProgress = ""
@@ -221,20 +217,39 @@ final class AppModel {
         guard let raw = snapshot?.lastScanAt else { return nil }
         return Self.fractionalISO.date(from: raw) ?? Self.plainISO.date(from: raw)
     }
+    /// A pause requested by Instagram (or local protection) that is still running.
+    var activeCooldown: Date? {
+        let until = [cooldownUntil, serverCooldownUntil].compactMap { $0 }.max()
+        return until.flatMap { $0 > Date() ? $0 : nil }
+    }
     var canScanWatchlist: Bool { phase == .ready && sessionAvailable && !requiresAuthentication && !watchlistBlocked && (!isScanning || activeCheckScope == "account") }
     var canScan: Bool { phase == .ready && sessionAvailable && !requiresAuthentication && (!isScanning || activeCheckScope == "watchlist") && !paused && !safetyBlocked }
-    var canReadInbox: Bool { phase == .ready && sessionAvailable && !requiresAuthentication && !isScanning && !watchlistBusy && !safetyBlocked }
     @ObservationIgnored weak var webCoordinator: FollowCheckWebCoordinator?
     @ObservationIgnored private var persistenceTask: Task<Void, Never>?
     private let eventsKey = "followcheck.native.events.v2"
 
     init() {
-        let defaults=UserDefaults.standard
+        Self.migratePacing(UserDefaults.standard)
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--preview-people") || arguments.contains("--preview-review") { screen = .people }
+        if arguments.contains("--preview-watchlist") { screen = .watchlist }
+        if arguments.contains("--preview-activity") { screen = .activity }
+        if arguments.contains(where: { $0.hasPrefix("--preview-settings") }) { screen = .settings }
+        if arguments.contains("--preview-circle") { screen = .people }
+        if isPreview { loadPreviewData(arguments) }
+        #endif
+        if let data = UserDefaults.standard.data(forKey: eventsKey),
+           let saved = try? JSONDecoder().decode([DiagnosticEvent].self, from: data) { events = Array(saved.suffix(1000)) }
+    }
+
+    /// Device diagnostic 2026-10-17: the 1 s reference pace reached Instagram's spam
+    /// limit within one Watchlist check. Untouched reference values move to safer presets.
+    private static func migratePacing(_ defaults: UserDefaults) {
         if !defaults.bool(forKey:"followcheck.referencePacing.v219") {
             for scope in ["own","watch"] {
                 let keys=[scope+"Delay",scope+"Every",scope+"Pause"]
-                let old=[5,5,30]
-                if zip(keys,old).allSatisfy({ key,value in defaults.object(forKey:"followcheck.limits."+key) == nil || defaults.integer(forKey:"followcheck.limits."+key) == value }) {
+                if zip(keys,[5,5,30]).allSatisfy({ key,value in defaults.object(forKey:"followcheck.limits."+key) == nil || defaults.integer(forKey:"followcheck.limits."+key) == value }) {
                     for (key,value) in zip(keys,[1,15,10]) {defaults.set(value,forKey:"followcheck.limits."+key)}
                 }
             }
@@ -244,18 +259,19 @@ final class AppModel {
             }
             defaults.set(true,forKey:"followcheck.referencePacing.v219")
         }
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains(where: { ["--preview-tools", "--preview-tools-lower"].contains($0) }) { screen = .tools }
-        if ProcessInfo.processInfo.arguments.contains("--preview-cleanup") { screen = .tools }
-        if ProcessInfo.processInfo.arguments.contains(where:{["--preview-intelligence","--preview-calendar","--preview-operations","--preview-memories"].contains($0)}) {screen = .tools}
-        if ProcessInfo.processInfo.arguments.contains("--preview-relations") { screen = .relations }
-        if ProcessInfo.processInfo.arguments.contains("--preview-watchlist") { screen = .watchlist }
-        if ProcessInfo.processInfo.arguments.contains("--preview-activity") { screen = .activity }
-        if isPreview { loadPreviewData(ProcessInfo.processInfo.arguments) }
-        #endif
-        if let data = UserDefaults.standard.data(forKey: eventsKey),
-           let saved = try? JSONDecoder().decode([DiagnosticEvent].self, from: data) { events = Array(saved.suffix(1000)) }
+        if !defaults.bool(forKey: "followcheck.referencePacing.v26") {
+            // Matches PacePreset.balanced: own 2 s / 12 pages / 20 s, Watchlist 3 s / 10 pages / 30 s.
+            for (scope, values) in [("own", [2, 12, 20]), ("watch", [3, 10, 30])] {
+                let keys = [scope + "Delay", scope + "Every", scope + "Pause"].map { "followcheck.limits." + $0 }
+                let untouched = zip(keys, [1, 15, 10]).allSatisfy { key, value in defaults.object(forKey: key) == nil || defaults.integer(forKey: key) == value }
+                if untouched { for (key, value) in zip(keys, values) { defaults.set(value, forKey: key) } }
+            }
+            let cooldown = "followcheck.limits.cooldownMinutes"
+            if defaults.object(forKey: cooldown) != nil && defaults.integer(forKey: cooldown) < 60 { defaults.set(60, forKey: cooldown) }
+            defaults.set(true, forKey: "followcheck.referencePacing.v26")
+        }
     }
+
     nonisolated static func redact(_ value: String) -> String {
         var text = String(value.prefix(2000))
         for pattern in ["https?://[^\\s]+", "(?i)Bearer\\s+[A-Za-z0-9._~+/=:-]+", "(?i)(sessionid|csrftoken|password|token|authorization|cookie)[\\\"']?\\s*[:=]\\s*[^\\s,;}]+"] {
@@ -316,6 +332,7 @@ final class AppModel {
             "\(iso.string(from: event.date)) | \(event.level) | \(event.message)" + (event.details.map { "\n  " + $0 } ?? "")
         }.joined(separator: "\n")
     }
+
     #if DEBUG
     /// Local design data for simulator screenshots. Never reaches release builds.
     private func loadPreviewData(_ arguments: [String]) {
@@ -331,6 +348,12 @@ final class AppModel {
             isScanning = true; activeCheckScope = "account"; progress = 0.42
             statusText = "A recolher seguidores"; detailText = "492 de 1172 perfis · página 20"
         }
+        if arguments.contains("--preview-cooldown") {
+            safetyBlocked = true; watchlistBlocked = true; safetyReason = "soft_throttle"
+            cooldownUntil = now.addingTimeInterval(52 * 60)
+            statusText = "Verificações em pausa"
+            detailText = "O Instagram sinalizou uma restrição temporária de atividade. O check parou e a referência anterior foi preservada."
+        }
         let names = ["ana.ribeiro", "joao_m", "studio.norte", "ines.costa", "pedro.alves", "cafe.da.esquina", "rita.sousa", "miguel.ferreira", "lisboa.film", "sofia_mendes", "tiago.dias", "carolina.pt", "nuno.arq", "beatriz.lopes"]
         let fullNames = ["Ana Ribeiro", "João Martins", "Studio Norte", "Inês Costa", "Pedro Alves", "Café da Esquina", "Rita Sousa", "Miguel Ferreira", "Lisboa Film Club", "Sofia Mendes", "Tiago Dias", "Carolina", "Nuno · Arquitetura", "Beatriz Lopes"]
         relationsReady = true
@@ -338,12 +361,15 @@ final class AppModel {
             Relation(["id": "preview-\(index)", "username": names[index], "name": fullNames[index], "following": index % 4 != 3, "follows": index % 3 != 1])
         }
         targets = [
-            WatchTarget(["id": "preview-target", "username": "studio.norte", "enabled": true, "baselineReady": true, "coverageVerified": true, "followers": 5204, "following": 341, "intervalMinutes": 1440, "lastSuccessAt": ms(1800)]),
-            WatchTarget(["id": "preview-target-2", "username": "lisboa.film", "enabled": true, "baselineReady": false, "followers": 0, "following": 0, "intervalMinutes": 360]),
+            WatchTarget(["id": "preview-target", "username": "priscila.pinto", "fullName": "Priscila Pinto", "enabled": true, "baselineReady": true, "followers": 916, "following": 344, "reportedFollowers": 1171, "reportedFollowing": 343,
+                         "partialLists": ["followers": ["observed": 916, "reported": 1171, "duplicates": 257]], "intervalMinutes": 1440, "lastSuccessAt": ms(1800), "nextRunAt": -ms(-84600)]),
+            WatchTarget(["id": "preview-target-2", "username": "studio.norte", "fullName": "Studio Norte", "enabled": true, "baselineReady": true, "followers": 5204, "following": 341, "reportedFollowers": 5204, "reportedFollowing": 341, "intervalMinutes": 360, "lastSuccessAt": ms(20000)]),
+            WatchTarget(["id": "preview-target-3", "username": "lisboa.film", "enabled": true, "baselineReady": false, "intervalMinutes": 1440]),
         ]
         watchEvents = [
-            WatchEvent(["id": "w1", "targetId": "preview-target", "type": "watch_new_follower", "title": "Novo seguidor", "username": "rita.sousa", "fullName": "Rita Sousa", "coverageVerified": true, "timestamp": ms(1800)]),
+            WatchEvent(["id": "w1", "targetId": "preview-target", "type": "watch_started_following", "title": "Começou a seguir", "username": "rita.sousa", "fullName": "Rita Sousa", "coverageVerified": true, "timestamp": ms(1800)]),
             WatchEvent(["id": "w2", "targetId": "preview-target", "type": "watch_stopped_following", "title": "Deixou de seguir", "username": "cafe.da.esquina", "fullName": "Café da Esquina", "coverageVerified": true, "timestamp": ms(1800)]),
+            WatchEvent(["id": "w3", "targetId": "preview-target-2", "type": "watch_new_follower", "title": "Novo seguidor", "username": "tiago.dias", "fullName": "Tiago Dias", "coverageVerified": true, "timestamp": ms(20000)]),
         ]
         accountEvents = [
             WatchEvent(["id": "a1", "type": "new_follower", "title": "Novo seguidor", "username": "ines.costa", "fullName": "Inês Costa", "detail": "Observado no último check completo.", "timestamp": ms(7200)]),
@@ -354,6 +380,35 @@ final class AppModel {
         ]
     }
     #endif
+
+    // MARK: Account events
+
+    /// The last check whose changes were opened in Activity, per account.
+    var seenActivityStamp = ""
+    var hasUnseenActivity: Bool {
+        guard let snapshot, (snapshot.newChanges ?? 0) > 0, !accountId.isEmpty else { return false }
+        let seen = seenActivityStamp.isEmpty ? UserDefaults.standard.string(forKey: "followcheck.activity.seen.\(accountId)") ?? "" : seenActivityStamp
+        return seen != snapshot.lastScanAt
+    }
+    /// Account events observed in the most recent check.
+    var latestAccountEvents: [WatchEvent] {
+        guard let latest = accountEvents.map(\.date).max() else { return [] }
+        return accountEvents.filter { abs($0.date.timeIntervalSince(latest)) < 600 }.sorted { $0.date > $1.date }
+    }
+    func count(_ filter: String) -> Int { relations.filter { $0.matches(filter) }.count }
+
+    // MARK: Commands
+
+    func select(_ destination: Screen) {
+        if destination == .people { loadRelations() }
+        screen = destination
+        if destination == .activity, let stamp = snapshot?.lastScanAt, !accountId.isEmpty {
+            seenActivityStamp = stamp
+            UserDefaults.standard.set(stamp, forKey: "followcheck.activity.seen.\(accountId)")
+        }
+        if destination == .activity || destination == .settings { webCoordinator?.control("logs") }
+        if destination == .watchlist { webCoordinator?.control("state") }
+    }
     /// Pull-to-refresh: re-read the engine state and the saved relations.
     func refreshState() {
         guard !isPreview else { return }
@@ -362,31 +417,6 @@ final class AppModel {
     }
     func clearLogs() { events.removeAll(); persistEvents(); webCoordinator?.control("clearLogs") }
     func attach(_ coordinator: FollowCheckWebCoordinator) { webCoordinator = coordinator }
-    /// The last check whose changes were opened in Activity, per account.
-    var seenActivityStamp = ""
-    var hasUnseenActivity: Bool {
-        guard let snapshot, (snapshot.newChanges ?? 0) > 0, !accountId.isEmpty else { return false }
-        let seen = seenActivityStamp.isEmpty ? UserDefaults.standard.string(forKey: "followcheck.activity.seen.\(accountId)") ?? "" : seenActivityStamp
-        return seen != snapshot.lastScanAt
-    }
-    func select(_ destination: Screen) {
-        if destination == .relations { loadRelations() }
-        screen = destination
-        if destination == .activity, let stamp = snapshot?.lastScanAt, !accountId.isEmpty {
-            seenActivityStamp = stamp
-            UserDefaults.standard.set(stamp, forKey: "followcheck.activity.seen.\(accountId)")
-        }
-        if destination == .activity { webCoordinator?.control("logs") }
-        if destination == .watchlist { webCoordinator?.control("state") }
-    }
-    func loadInbox(threadId: String = "", more: Bool = false) {
-        guard !inboxLoading, canReadInbox, let coordinator = webCoordinator else { return }
-        inboxWebMode = false
-        inboxLoading = true
-        if openThread != threadId { directMessages = [] }
-        openThread = threadId
-        coordinator.control("inbox", args: ["threadId": threadId,"kind":inboxKind,"cursor":more ? inboxCursor:""])
-    }
     func loadRelations() {
         guard !isPreview else { return }
         guard !relationsLoading else { return }
@@ -398,18 +428,21 @@ final class AppModel {
         confirmingSession = true
         webCoordinator?.control("confirmSession")
     }
-    func openPanel() { select(.relations) }
     func cancelCurrentScan() { CheckContinuation.shared.finish(success:false);webCoordinator?.control("cancelCurrent") }
     func openInstagram() { screen = .instagram; webCoordinator?.openInstagramHome() }
-    func openInstagramInbox() {
-        guard !checkIsRunning else {notice="Pára o check atual antes de abrir as mensagens na sessão Instagram.";return}
-        inboxWebMode = true
-        screen = .inbox
+    func openInstagramMessages() {
+        guard !checkIsRunning else { notice = "Pára o check atual antes de abrir as mensagens."; return }
+        screen = .instagram
         webCoordinator?.openInstagramInbox()
+    }
+    func openProfile(_ handle: String) {
+        guard handle.range(of: "^[A-Za-z0-9._]{1,30}$", options: .regularExpression) != nil,
+              let url = URL(string: "https://www.instagram.com/\(handle)/") else { return }
+        screen = .instagram
+        webCoordinator?.open(url)
     }
     func reload() { webCoordinator?.reload() }
     func goBack() { webCoordinator?.goBack() }
-    func closePanel() { webCoordinator?.closeFollowCheck(); screen = .home }
     func scan() {
         guard canScan else { return }
         isScanning = true; progress = nil
@@ -453,7 +486,7 @@ final class AppModel {
                 if isScanning {record("Check em espera; as páginas validadas serão retomadas ao regressar.")}
                 isScanning=false;watchlistBusy=false;progress=nil
             } else {record("Continuação do check autorizada pelo iOS; a execução depende da disponibilidade do WebKit.")}
-            inboxLoading=false;relationsLoading=false;confirmingSession=false
+            relationsLoading=false;confirmingSession=false
         case .inactive: break
         @unknown default: break
         }
@@ -473,10 +506,13 @@ final class AppModel {
             }
         }
     }
+
+    // MARK: WebKit lifecycle
+
     func pageStarted(url: URL?) {
         activeCheckScope = ""
         requiresAuthentication = true; sessionAvailable = false; isScanning = false; watchlistBusy = false; progress = nil
-        relationsLoading = false; inboxLoading = false; confirmingSession = false
+        relationsLoading = false; confirmingSession = false
         phase = .loadingInstagram; currentURL = url?.absoluteString ?? ""
         statusText = "A abrir a sessão"; record("Navegação iniciada.")
     }
@@ -492,6 +528,9 @@ final class AppModel {
     }
     func panelOpened() { isPanelOpen = true; isBusy = false; record("Área aberta.") }
     func panelClosed() { isPanelOpen = false; isBusy = false }
+
+    // MARK: Snapshot and backup
+
     private func acceptSnapshot(_ value: [String: Any]) {
         var enriched = value
         if value["newChanges"] == nil, snapshot?.lastScanAt == value["lastScanAt"] as? String { enriched["newChanges"] = snapshot?.newChanges }
@@ -555,6 +594,9 @@ final class AppModel {
         _ = try await coordinator.request("backup",args:["operation":"restore","accountId":accountId,"backup":backup])
         await saveScanBackup();loadRelations()
     }
+
+    // MARK: Pacing
+
     @ObservationIgnored private var appliedPacing = ""
     func configureCooldown(minutes:Int,release:Bool=false) async throws {
         guard let coordinator=webCoordinator,sessionAvailable else {throw NSError(domain:"FollowCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"Liga a sessão para aplicar esta preferência."])}
@@ -564,8 +606,8 @@ final class AppModel {
         let defaults=UserDefaults.standard
         func value(_ key: String,_ fallback: Double) -> Double {(defaults.object(forKey:"followcheck.limits."+key) as? NSNumber)?.doubleValue ?? fallback}
         func pacing(_ scope:String)->[String:Any] {
-            let delay=value(scope+"Delay",1)*1000
-            return ["pageDelayMinMs":delay+300,"pageDelayMaxMs":delay+1300,"pauseEveryPages":value(scope+"Every",15),"pauseDurationMs":value(scope+"Pause",10)*1000,"globalGapMinutes":scope == "own" ? value("ownGap",60):0,"manualRespectsGap":scope == "own" ? defaults.bool(forKey:"followcheck.limits.manualGap"):false]
+            let delay=value(scope+"Delay",scope == "own" ? 2 : 3)*1000
+            return ["pageDelayMinMs":delay+300,"pageDelayMaxMs":delay+1300,"pauseEveryPages":value(scope+"Every",scope == "own" ? 12 : 10),"pauseDurationMs":value(scope+"Pause",scope == "own" ? 20 : 30)*1000,"globalGapMinutes":scope == "own" ? value("ownGap",60):0,"manualRespectsGap":scope == "own" ? defaults.bool(forKey:"followcheck.limits.manualGap"):false]
         }
         let args:[String:Any]=["own":pacing("own"),"watchlist":pacing("watch")]
         let signature=String(decoding:try JSONSerialization.data(withJSONObject:args,options:.sortedKeys),as:UTF8.self)
@@ -574,35 +616,10 @@ final class AppModel {
         _ = try await coordinator.request("pacing",args:args)
         appliedPacing=signature
     }
+
+    // MARK: Engine replies
+
     func controlCompleted(_ command: String, result: [String: Any]) {
-        if command == "inbox" {
-            inboxLoading = false
-            if result["code"] as? String == "inbox_route_unavailable" {
-                inboxUnavailable = true
-                record("A leitura nativa da Inbox não está disponível. As conversas guardadas foram preservadas.",level:"warn")
-                if screen == .inbox && !checkIsRunning { openInstagramInbox() }
-                return
-            }
-            if result["ok"] as? Bool == true, result["accountId"] as? String == accountId,
-               let data = result["data"] as? [String: Any] {
-                inboxUnavailable = false
-                if let inbox = data["inbox"] as? [String: Any] {
-                    guard (result["kind"] as? String ?? "inbox")==inboxKind else{return}
-                    let incoming = (inbox["threads"] as? [[String: Any]] ?? []).map(Conversation.init).filter { !$0.id.isEmpty }
-                    if result["append"] as? Bool == true {
-                        let existing=Set(conversations.map(\.id))
-                        conversations += incoming.filter{!existing.contains($0.id)}
-                    } else {conversations=incoming}
-                    let next=inbox["oldest_cursor"] as? String ?? inbox["next_cursor"] as? String ?? ""
-                    inboxHasMore=(inbox["has_older"] as? Bool ?? inbox["has_more"] as? Bool ?? false) && !next.isEmpty && (result["append"] as? Bool != true || next != inboxCursor)
-                    inboxCursor=next
-                    inboxLoaded = true
-                }
-                if let thread = data["thread"] as? [String: Any], result["threadId"] as? String == openThread {
-                    directMessages = (thread["items"] as? [[String: Any]] ?? []).map { DirectMessage($0, owner: accountId) }.filter { !$0.id.isEmpty }.reversed()
-                }
-            }
-        }
         if command == "confirmSession" {
             confirmingSession = false
             if result["ok"] as? Bool == true {
@@ -647,8 +664,7 @@ final class AppModel {
                     event.details = String(data: data, encoding: .utf8)
                 }
                 event.id = id
-                let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let raw = log["at"] as? String, let date = f.date(from: raw) { event.date = date }
+                if let raw = log["at"] as? String, let date = Self.fractionalISO.date(from: raw) { event.date = date }
                 events.append(event)
             }
             events = Array(events.sorted { $0.date < $1.date }.suffix(1000)); persistEvents()
@@ -679,12 +695,7 @@ final class AppModel {
             }
             paused = message["paused"] as? Bool ?? false
             schedulerEnabled = message["schedulerEnabled"] as? Bool ?? false
-            let safety = message["safety"] as? [String: Any] ?? [:]
-            cooldownUntil = (safety["cooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
-            serverCooldownUntil = (safety["serverCooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
-            safetyReason = safety["reason"] as? String ?? ""
-            safetyBlocked = safety["blocked"] as? Bool ?? false
-            if safetyBlocked { statusText = "Verificações em pausa"; detailText = Self.redact(safety["message"] as? String ?? "Confirma a conta no Instagram.") }
+            applySafety(message["safety"] as? [String: Any] ?? [:])
             if !safetyBlocked && sessionAvailable && !isScanning {
                 statusText = paused ? "Verificações pausadas" : "Sessão disponível"
                 detailText = paused ? "Retoma quando quiseres iniciar um novo check." : "Pronto para verificar o teu círculo."
@@ -699,12 +710,12 @@ final class AppModel {
         switch p["event"] as? String ?? "" {
         case "session_state":
             let next = p["userId"] as? String ?? ""
-            if accountId != next { profilePhotoURL = ""; inboxUnavailable = false; inboxWebMode = false }
+            if accountId != next { profilePhotoURL = "" }
             if p["connected"] as? Bool == true, let photo = p["profilePicUrl"] as? String, !photo.isEmpty { profilePhotoURL = photo }
             if p["connected"] as? Bool == true && !next.isEmpty {
                 if accountId != next {
                     tools.resetAccount(); seenActivityStamp = ""
-                    snapshot = nil; targets = []; watchEvents = []; accountEvents = []; watchlistAccounts = []; watchlistListTarget = ""; conversations = []; directMessages = []; inboxLoaded = false; relations = []; relationsReady = false; accountId = next
+                    snapshot = nil; targets = []; watchEvents = []; accountEvents = []; watchlistAccounts = []; watchlistListTarget = ""; relations = []; relationsReady = false; accountId = next
                     if let data = UserDefaults.standard.data(forKey: "followcheck.snapshot.\(next)") { snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) }
                     Task { await tools.load() }
                 }
@@ -713,15 +724,10 @@ final class AppModel {
                 if !safetyBlocked && !isScanning { statusText = "Sessão disponível"; detailText = "Pronto para um check em primeiro plano." }
             } else {
                 sessionAvailable = false
-                if p["logoutConfirmed"] as? Bool == true { tools.resetAccount(); accountId = ""; username = ""; snapshot = nil; targets = []; watchEvents = []; accountEvents = []; relations = []; relationsReady = false; conversations = []; directMessages = []; inboxLoaded = false; watchlistAccounts = [] }
+                if p["logoutConfirmed"] as? Bool == true { tools.resetAccount(); accountId = ""; username = ""; snapshot = nil; targets = []; watchEvents = []; accountEvents = []; relations = []; relationsReady = false; watchlistAccounts = [] }
             }
         case "safety_state":
-            let safety = p["safety"] as? [String: Any] ?? [:]
-            cooldownUntil = (safety["cooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
-            serverCooldownUntil = (safety["serverCooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
-            safetyReason = safety["reason"] as? String ?? ""
-            safetyBlocked = safety["blocked"] as? Bool ?? false
-            if safetyBlocked { detailText = Self.redact(safety["message"] as? String ?? "Verificação necessária."); statusText = "Verificações em pausa" }
+            applySafety(p["safety"] as? [String: Any] ?? [:])
         case "native_snapshot": if let value = p["snapshot"] as? [String: Any] { acceptSnapshot(value) }
         case "workspace_state": if p["open"] as? Bool == true { panelOpened() } else { panelClosed() }
         case "progress", "monitor_progress":
@@ -766,5 +772,12 @@ final class AppModel {
             webCoordinator?.control("state")
         default: break
         }
+    }
+    private func applySafety(_ safety: [String: Any]) {
+        cooldownUntil = (safety["cooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
+        serverCooldownUntil = (safety["serverCooldownUntil"] as? Double).flatMap { $0 > 0 ? Date(timeIntervalSince1970:$0/1000):nil }
+        safetyReason = safety["reason"] as? String ?? ""
+        safetyBlocked = safety["blocked"] as? Bool ?? false
+        if safetyBlocked { statusText = "Verificações em pausa"; detailText = Self.redact(safety["message"] as? String ?? "Confirma a conta no Instagram.") }
     }
 }

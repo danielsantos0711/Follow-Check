@@ -16,7 +16,7 @@ struct FollowCheckApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
+            RootView(model: model)
                 .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
                 .onAppear { updateIdleTimer() }
                 .onChange(of:keepAwake) { _,_ in updateIdleTimer() }

@@ -145,6 +145,13 @@ final class FollowCheckWebCoordinator: NSObject {
         webView?.load(URLRequest(url:url))
     }
 
+    func open(_ url: URL) {
+        guard isInstagramURL(url) else { return }
+        shouldRestorePanel = false
+        model.panelClosed()
+        webView?.load(URLRequest(url: url))
+    }
+
     func openAccountSwitcher() {
         shouldRestorePanel = false
         model.panelClosed()
@@ -593,22 +600,8 @@ extension FollowCheckWebCoordinator: WKScriptMessageHandlerWithReply {
                   let offset=details["offset"] as? Int,let count=details["count"] as? Int,offset>=0,count>=0,count<=1024*1024,offset<=file.size,count<=file.size-offset else {replyHandler(nil,"Leitura de arquivo expirada ou inválida.");return}
             do {let handle=try FileHandle(forReadingFrom:file.url);defer{try? handle.close()};try handle.seek(toOffset:UInt64(offset));let data=try handle.read(upToCount:count) ?? Data();replyHandler(["base64":data.base64EncodedString()],nil)}catch{replyHandler(nil,error.localizedDescription)}
         case "evidence.professional":
-            let owner=details["accountId"] as? String ?? ""
-            guard owner==model.accountId,!owner.isEmpty else{replyHandler(nil,"A conta mudou.");return}
-            let generation=navigationGeneration
-            Task {do {
-                let operation=details["operation"] as? String ?? "read"
-                let result:[String:Any]
-                if operation=="config" {result=try await model.tools.request("integration",["operation":"config"])}
-                else if operation=="select" {let patch=details["config"] as? [String:Any] ?? [:];let selection=patch.filter{["selectedAccountId","selectedProfileId"].contains($0.key)};result=try await model.tools.request("integration",["operation":"configure","config":selection])}
-                else {
-                    let path=details["path"] as? String ?? ""
-                    guard (path=="/v1/accounts" || path.hasPrefix("/v1/accounts/") || path.hasPrefix("/v1/inbox/") || path.hasPrefix("/v1/analytics/")) else{replyHandler(nil,"Fonte de evidência não permitida.");return}
-                    result=try await model.tools.professional(path,query:details["query"] as? [String:Any] ?? [:])
-                }
-                guard owner==model.accountId,generation==navigationGeneration else{replyHandler(nil,"A conta mudou.");return}
-                replyHandler(result,nil)
-            }catch{replyHandler(nil,error.localizedDescription)}}
+            // The professional integration was removed in 2.6; the engine treats this source as unavailable.
+            replyHandler(nil,"Fonte profissional indisponível nesta versão.")
         case "scripts.execute":
             guard let webView, !isAuthenticationURL(webView.url), let files = details["files"] as? [String], !files.isEmpty else {
                 replyHandler(["ok": false, "error": "Scripts indisponíveis durante autenticação."], nil); return

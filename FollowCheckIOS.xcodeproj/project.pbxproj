@@ -9,26 +9,31 @@
 /* Begin PBXBuildFile section */
 		A1000000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000F /* Assets.xcassets */; };
 		A1000000000000000000000B /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000E /* DesignSystem.swift */; };
-        A1000000000000000000000A = {isa = PBXBuildFile; fileRef = B1000000000000000000000D; };
+        A1000000000000000000000A /* PeopleScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000D /* PeopleScreen.swift */; };
 		A10000000000000000000001 /* FollowCheckApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* FollowCheckApp.swift */; };
 		A10000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AppModel.swift */; };
 		A10000000000000000000003 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AppDelegate.swift */; };
-		A10000000000000000000004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* ContentView.swift */; };
+		A10000000000000000000004 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* RootView.swift */; };
 		A10000000000000000000005 /* InstagramWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* InstagramWebView.swift */; };
 		A10000000000000000000006 /* FollowCheckWebCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* FollowCheckWebCoordinator.swift */; };
 		A10000000000000000000007 /* Extension in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* Extension */; };
 		A10000000000000000000008 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* AppIcon.png */; };
-		A10000000000000000000009 = {isa = PBXBuildFile; fileRef = B1000000000000000000000C; };
+		A10000000000000000000009 /* ActionQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000000C /* ActionQueue.swift */; };
+		A10000000000000000000010 /* HomeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* HomeScreen.swift */; };
+		A10000000000000000000011 /* CircleScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CircleScreen.swift */; };
+		A10000000000000000000012 /* WatchlistScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* WatchlistScreen.swift */; };
+		A10000000000000000000013 /* ActivityScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* ActivityScreen.swift */; };
+		A10000000000000000000014 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* SettingsScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		B1000000000000000000000F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B1000000000000000000000E /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
-        B1000000000000000000000D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeParity.swift; sourceTree = "<group>"; };
+        B1000000000000000000000D /* PeopleScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeopleScreen.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* FollowCheckApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowCheckApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		B10000000000000000000004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		B10000000000000000000005 /* InstagramWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstagramWebView.swift; sourceTree = "<group>"; };
 		B10000000000000000000006 /* FollowCheckWebCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowCheckWebCoordinator.swift; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
@@ -36,7 +41,12 @@
 		B10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B1000000000000000000000A /* FollowCheck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FollowCheck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000B /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		B1000000000000000000000C = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTools.swift; sourceTree = "<group>"; };
+		B1000000000000000000000C /* ActionQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionQueue.swift; sourceTree = "<group>"; };
+		B10000000000000000000010 /* HomeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreen.swift; sourceTree = "<group>"; };
+		B10000000000000000000011 /* CircleScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircleScreen.swift; sourceTree = "<group>"; };
+		B10000000000000000000012 /* WatchlistScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistScreen.swift; sourceTree = "<group>"; };
+		B10000000000000000000013 /* ActivityScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityScreen.swift; sourceTree = "<group>"; };
+		B10000000000000000000014 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,10 +75,15 @@
 				B10000000000000000000001 /* FollowCheckApp.swift */,
 				B10000000000000000000002 /* AppModel.swift */,
 				B10000000000000000000003 /* AppDelegate.swift */,
-				B10000000000000000000004 /* ContentView.swift */,
+				B10000000000000000000004 /* RootView.swift */,
 				B1000000000000000000000E /* DesignSystem.swift */,
-                B1000000000000000000000C,
-                B1000000000000000000000D,
+				B10000000000000000000010 /* HomeScreen.swift */,
+				B10000000000000000000011 /* CircleScreen.swift */,
+				B10000000000000000000012 /* WatchlistScreen.swift */,
+				B10000000000000000000013 /* ActivityScreen.swift */,
+				B10000000000000000000014 /* SettingsScreen.swift */,
+				B1000000000000000000000C /* ActionQueue.swift */,
+				B1000000000000000000000D /* PeopleScreen.swift */,
 				B10000000000000000000005 /* InstagramWebView.swift */,
 				B10000000000000000000006 /* FollowCheckWebCoordinator.swift */,
 				B10000000000000000000007 /* AppIcon.png */,
@@ -162,10 +177,15 @@
 				A10000000000000000000001 /* FollowCheckApp.swift in Sources */,
 				A10000000000000000000002 /* AppModel.swift in Sources */,
 				A10000000000000000000003 /* AppDelegate.swift in Sources */,
-				A10000000000000000000004 /* ContentView.swift in Sources */,
+				A10000000000000000000004 /* RootView.swift in Sources */,
 				A1000000000000000000000B /* DesignSystem.swift in Sources */,
-                A10000000000000000000009,
-        A1000000000000000000000A,
+				A10000000000000000000010 /* HomeScreen.swift in Sources */,
+				A10000000000000000000011 /* CircleScreen.swift in Sources */,
+				A10000000000000000000012 /* WatchlistScreen.swift in Sources */,
+				A10000000000000000000013 /* ActivityScreen.swift in Sources */,
+				A10000000000000000000014 /* SettingsScreen.swift in Sources */,
+				A10000000000000000000009 /* ActionQueue.swift in Sources */,
+				A1000000000000000000000A /* PeopleScreen.swift in Sources */,
 				A10000000000000000000005 /* InstagramWebView.swift in Sources */,
 				A10000000000000000000006 /* FollowCheckWebCoordinator.swift in Sources */,
 			);

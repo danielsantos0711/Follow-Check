@@ -1,13 +1,14 @@
 home --preview-home
-home-lower --preview-home-lower
 home-checking --preview-checking
+home-cooldown --preview-cooldown
 home-empty --preview-empty
-relations --preview-relations
+people --preview-people
+people-select --preview-people --preview-select
+review --preview-review
+circle --preview-circle
 watchlist --preview-watchlist
+target --preview-watchlist --preview-target
 activity --preview-activity
-tools --preview-tools
-tools-lower --preview-tools-lower
+activity-watchlist --preview-activity --preview-activity-watchlist
 settings --preview-settings
-cleanup --preview-cleanup
-intelligence --preview-intelligence
-operations --preview-operations
+pace --preview-settings-pace

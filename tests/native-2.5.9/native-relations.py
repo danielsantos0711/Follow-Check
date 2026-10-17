@@ -1,7 +1,7 @@
 from pathlib import Path
 import subprocess,tempfile
 source=Path('FollowCheckIOS/AppModel.swift').read_text()
-a=source.index('    struct Relation: Identifiable {');b=source.index('    struct Conversation:',a)
+a=source.index('    struct Relation: Identifiable {');b=source.index('    struct WatchEvent: Identifiable {',a)
 model='import Foundation\nenum AppModel {\n'+source[a:b]+'\n}\n'
 event_start=source.index('    struct WatchEvent: Identifiable {')
 event_end=source.index('    var watchEvents:',event_start)
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory() as d:
  subprocess.run(['swift',str(p)],check=True)
 
 # Exercise the actual Swift save implementation with asynchronous bridge replies.
-tools=Path('FollowCheckIOS/NativeTools.swift').read_text()
+tools=Path('FollowCheckIOS/ActionQueue.swift').read_text()
 methods=tools[tools.index('    func save(_ name:'):tools.index('    func execute(')]
 queue=tools[tools.index('        func persistQueue() async {'):tools.index('        var sent=0')]
 store='''import Foundation
