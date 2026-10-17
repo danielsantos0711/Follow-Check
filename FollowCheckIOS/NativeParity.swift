@@ -21,13 +21,13 @@ struct NativeQueueView:View {
                 }
                 Button("Parar após a operação atual",role:.destructive){store.operationPaused=true}
             }else if !pending.isEmpty {
-                Button("Rever \(pending.count) perfis ainda não iniciados"){review=true}.buttonStyle(.borderedProminent)
+                Button("Rever \(pending.count) perfis ainda não iniciados"){review=true}.buttonStyle(ProminentButtonStyle())
             }
             ForEach(rows.compactMap{row -> QueueRecord? in guard let id=row["id"] as? String else{return nil};return QueueRecord(id:id,value:row)}){item in
                 let status=item.value["status"] as? String ?? "pending"
                 HStack {
                     ProfileAvatar(photoURL:item.value["photoURL"] as? String ?? "",size:40)
-                    VStack(alignment:.leading,spacing:5){Text("@"+(item.value["username"] as? String ?? ""));Text(Self.labels[status] ?? status).font(.caption).foregroundStyle(status=="confirmed" ? FCStyle.mint:status=="unconfirmed" ? .orange:.secondary);if let message=item.value["message"] as? String{Text(message).font(.caption2).foregroundStyle(.secondary)}}
+                    VStack(alignment:.leading,spacing:5){Text("@"+(item.value["username"] as? String ?? ""));Text(Self.labels[status] ?? status).font(.caption).foregroundStyle(status=="confirmed" ? FCStyle.mint:status=="unconfirmed" ? Theme.caution:.secondary);if let message=item.value["message"] as? String{Text(message).font(.caption2).foregroundStyle(.secondary)}}
                     Spacer()
                     Image(systemName:status=="confirmed" ? "checkmark.circle.fill":status=="unconfirmed" ? "exclamationmark.triangle":"clock")
                 }.fcCard()
@@ -155,7 +155,7 @@ struct RelationshipIntelligence: View {
                     Text("1 · Construir plano").font(.headline)
                     Stepper("Objetivo: \(target) mútuos",value:$target,in:0...10000,step:10)
                     Button("Construir plano de revisão",systemImage:"slider.horizontal.3") {Task{var preferences=store.workspace["relationship-preferences"] as? [String:Any] ?? [:];preferences["target"]=target;await store.save("relationship-preferences",preferences);await refresh();filter="Objetivo";selected=candidateIDs}}
-                        .buttonStyle(.borderedProminent).disabled(loading || rows.isEmpty)
+                        .buttonStyle(ProminentButtonStyle()).disabled(loading || rows.isEmpty)
                     Text("Conversas, proteções, contradições e dados insuficientes ficam fora das sugestões automáticas.").font(.caption).foregroundStyle(.secondary)
                 }.fcCard()
                 HStack {Image(systemName:"magnifyingglass");TextField("Nome, username ou etiqueta",text:$query).textInputAutocapitalization(.never)}.fcCard()
@@ -170,7 +170,7 @@ struct RelationshipIntelligence: View {
                     Button("Selecionar resultados"){selected=Set(visible.filter{!$0.protected}.map(\.id))}.font(.caption)
                 }
                 if loading {HStack{ProgressView(model.legacyProgress.isEmpty ? "A cruzar evidências…":model.legacyProgress);Spacer();Button("Cancelar"){model.webCoordinator?.cancelArchiveImport();if loadingOperation != "import" {model.cancelCurrentScan()}}}}
-                if let failure {Text(failure).foregroundStyle(.orange).fcCard()}
+                if let failure {Text(failure).foregroundStyle(Theme.caution).fcCard()}
                 ForEach(visible) {row in
                     HStack(spacing:12) {
                         Button {if selected.contains(row.id){selected.remove(row.id)}else{selected.insert(row.id)}} label:{Image(systemName:row.protected ? "shield.fill":selected.contains(row.id) ? "checkmark.circle.fill":"circle").font(.title2)}.disabled(row.protected)
@@ -251,7 +251,7 @@ struct RelationshipIntelligence: View {
                     Button("Só deixar de seguir"){action="unfollow";review=true}
                     Button("Só remover seguidor"){action="removeFollower";review=true}
                     Button("Desligar nos dois sentidos"){action="disconnect";review=true}
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(ProminentButtonStyle())
             }.disabled(chosen.isEmpty || store.operationRunning)
         }.font(.caption).padding(16).background(.ultraThinMaterial)
     }
@@ -274,7 +274,7 @@ private struct EvidenceDetail:View {
                 Text(row.profile["evidenceSummary"] as? String ?? "Sem histórico associado").foregroundStyle(.secondary)
                 ForEach(["reason","protectionReason","autoCleanupReason"],id:\.self){key in
                     if let values=row.profile[key] as? [String]{ForEach(values,id:\.self){Text($0).font(.subheadline)}}
-                    if let value=row.features[key] as? String,!value.isEmpty{Text(value).font(.subheadline).foregroundStyle(.orange)}
+                    if let value=row.features[key] as? String,!value.isEmpty{Text(value).font(.subheadline).foregroundStyle(Theme.caution)}
                 }
                 if let signals=row.profile["signals"] as? [String:Any] {
                     Text("Sinais do histórico").font(.headline)
@@ -289,14 +289,14 @@ private struct EvidenceDetail:View {
                         if let quality=evidence["quality"] as? NSNumber {Text("Qualidade da fonte: \(quality.intValue)%").font(.caption)}
                     }.frame(maxWidth:.infinity,alignment:.leading).fcCard()
                 }
-                ForEach(row.proof["abstentionReasons"] as? [String] ?? [],id:\.self){Text($0).font(.subheadline).foregroundStyle(.orange)}
+                ForEach(row.proof["abstentionReasons"] as? [String] ?? [],id:\.self){Text($0).font(.subheadline).foregroundStyle(Theme.caution)}
                 if let next=row.proof["nextBestAction"] as? [String:Any] {
                     VStack(alignment:.leading,spacing:6){Text(next["label"] as? String ?? "Próximo passo").font(.headline);Text(next["reason"] as? String ?? "").font(.subheadline).foregroundStyle(.secondary)}.fcCard()
                 }
                 DisclosureGroup("Detalhes da análise"){Text(Self.formatted(row.proof)).font(.caption.monospaced()).textSelection(.enabled)}
             }.padding(20)}.navigationTitle("Evidência por perfil").navigationBarTitleDisplayMode(.inline)
                 .toolbar{ToolbarItem(placement:.confirmationAction){Button("Concluído"){dismiss()}}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
     private static let labels=["dmSent":"Mensagens enviadas","dmReceived":"Mensagens recebidas","dmDays":"Dias com mensagens","likesGiven":"Gostos teus","commentsGiven":"Comentários teus","mentions":"Menções","storyReactions":"Reações a Stories","total":"Total de sinais"]
     private static func formatted(_ value:[String:Any])->String {guard let data=try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys])else{return "Sem evidência adicional"};return String(decoding:data,as:UTF8.self)}
@@ -342,8 +342,8 @@ struct NativeActionReview:View {
                 }
             }.navigationTitle("Rever operação").navigationBarTitleDisplayMode(.inline)
                 .toolbar{ToolbarItem(placement:.cancellationAction){Button("Voltar"){dismiss()}}}
-                .safeAreaInset(edge:.bottom){Button("Confirmar \(eligible.count) perfis"){let confirmed=eligible;dismiss();Task{await model.tools.execute(action,people:confirmed)}}.buttonStyle(.borderedProminent).disabled(eligible.isEmpty || model.tools.operationRunning).padding().frame(maxWidth:.infinity).background(.ultraThinMaterial)}
-        }.tint(FCStyle.accent)
+                .safeAreaInset(edge:.bottom){Button("Confirmar \(eligible.count) perfis"){let confirmed=eligible;dismiss();Task{await model.tools.execute(action,people:confirmed)}}.buttonStyle(ProminentButtonStyle()).disabled(eligible.isEmpty || model.tools.operationRunning).padding().frame(maxWidth:.infinity).background(.ultraThinMaterial)}
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -383,7 +383,7 @@ private struct PrivateMemoryGallery:View {
                 Label("Só neste dispositivo",systemImage:"lock.shield").font(.caption.bold()).foregroundStyle(FCStyle.mint)
                 Text("Excertos do histórico que importaste. Não são incluídos nas cópias exportadas.").font(.caption).foregroundStyle(.secondary)
                 if loading {ProgressView("A abrir memórias…")}
-                if let failure {Text(failure).foregroundStyle(.orange)}
+                if let failure {Text(failure).foregroundStyle(Theme.caution)}
                 if ids.isEmpty && !loading {ContentUnavailableView("Sem excertos",systemImage:"text.bubble",description:Text("Importa o histórico com mensagens para ver as memórias por pessoa."))}
                 ForEach(ids,id:\.self){id in
                     VStack(alignment:.leading,spacing:14){
@@ -408,6 +408,6 @@ private struct PrivateMemoryGallery:View {
             .onChange(of:model.accountId){_,_ in entries=[:];Task{await load()}}
             .onChange(of:scenePhase){_,phase in if phase != .active {entries=[:]}else{Task{await load()}}}
             .privacySensitive()
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }

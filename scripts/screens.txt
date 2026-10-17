@@ -1,4 +1,6 @@
 home --preview-home
+home-checking --preview-checking
+home-empty --preview-empty
 relations --preview-relations
 watchlist --preview-watchlist
 activity --preview-activity

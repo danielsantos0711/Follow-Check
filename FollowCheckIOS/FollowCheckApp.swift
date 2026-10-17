@@ -12,11 +12,12 @@ struct FollowCheckApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var model = AppModel()
     @AppStorage("followcheck.keepAwake") private var keepAwake = true
+    @AppStorage("followcheck.appearance") private var appearance = "system"
 
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
                 .onAppear { updateIdleTimer() }
                 .onChange(of:keepAwake) { _,_ in updateIdleTimer() }
                 .onChange(of:model.checkIsRunning) { _,_ in updateIdleTimer() }

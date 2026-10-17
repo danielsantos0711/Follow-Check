@@ -43,7 +43,7 @@ final class FollowCheckWebCoordinator: NSObject {
         view.scrollView.keyboardDismissMode = .interactive
         view.scrollView.contentInsetAdjustmentBehavior = .never
         view.isOpaque = false
-        view.backgroundColor = UIColor(red: 0.035, green: 0.039, blue: 0.063, alpha: 1)
+        view.backgroundColor = Theme.webBackground
         view.scrollView.backgroundColor = view.backgroundColor
         webView = view
 

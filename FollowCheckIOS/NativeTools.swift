@@ -50,75 +50,100 @@ private struct ClassicCleanup: View {
         }
     }
     var body:some View {
-        VStack(spacing:15) {
-            VStack(alignment:.leading,spacing:10) {
-                Text("Revê. Protege. Simplifica.").font(.title2.bold())
-                Text("Escolhe quem manter e revê cada ação antes de limpar as tuas relações.").font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Label("\(model.relations.filter{kept($0)}.count) para manter",systemImage:"shield.checkered").foregroundStyle(FCStyle.mint)
-                    Spacer();Text("\(selected.count) selecionados")
-                }.font(.caption.weight(.medium)).padding(12).background(FCStyle.mint.opacity(0.07),in:.rect(cornerRadius:12))
-            }
-            Picker("Lista",selection:$mode){Text("A seguir").tag("following");Text("Seguidores").tag("followers")}.pickerStyle(.segmented)
-            Button("Círculo real · análise de ligações",systemImage:"circle.hexagongrid"){intelligence=true}.font(.caption)
-            if mode=="followers" {
-                Button("Marcar seguidores que não sigo") {
-                    let ids=Set(model.relations.filter{$0.follows && !$0.following && !store.protectedIDs.contains($0.id)}.map(\.id))
-                    mark(ids,"remove");selected=ids;filter="Remover"
-                }.font(.caption).buttonStyle(.bordered)
-            }
-            HStack {Image(systemName:"magnifyingglass");TextField("Pesquisar perfis",text:$query).textInputAutocapitalization(.never)}.padding(13).background(FCStyle.card,in:.rect(cornerRadius:13))
-            HStack {
-                ForEach(["Rever","Manter","Remover","Todos"],id:\.self){value in Button {filter=value} label:{Text(value).font(.caption.bold()).padding(.horizontal,10).padding(.vertical,10).background(filter==value ? FCStyle.accent.opacity(0.2):FCStyle.card,in:.capsule)}}
-                Spacer()
-                Button(selected.isEmpty ? "Selecionar":"Limpar"){selected=selected.isEmpty ? Set(people.filter{!kept($0)}.map(\.id)):[]}.font(.caption).disabled(store.operationRunning)
-            }
-            HStack {
-                Picker("Relação",selection:$relationship){ForEach(["Todos","Mútuos","Não me seguem","Eu não sigo"],id:\.self){Text($0)}}
-                if !selected.isEmpty {
-                    Menu("Decidir \(selected.count)") {
-                        Button("Manter"){mark(selected,"keep");selected=[]}
-                        Button("Rever depois"){mark(selected,"review");selected=[]}
-                        Button("Marcar para remover"){mark(selected,"remove")}
-                    }
+        VStack(alignment:.leading,spacing:12) {
+            VStack(alignment:.leading,spacing:12) {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("Revê. Protege. Simplifica.").font(.title2.weight(.bold)).foregroundStyle(Theme.ink)
+                    Text("Marca quem manter e revê cada ação antes de limpar as tuas relações.").font(.footnote).foregroundStyle(Theme.ink2)
                 }
-            }.font(.caption)
+                HStack(spacing:10) {
+                    Label("\(model.relations.filter{kept($0)}.count) a manter",systemImage:"shield.fill").foregroundStyle(Theme.signalInk)
+                    Spacer()
+                    Text("\(selected.count) selecionados").foregroundStyle(Theme.ink2).monospacedDigit()
+                }
+                .font(.footnote.weight(.semibold)).padding(12)
+                .background(Theme.signal.opacity(0.12),in:.rect(cornerRadius:12,style:.continuous))
+                Picker("Lista",selection:$mode){Text("A seguir").tag("following");Text("Seguidores").tag("followers")}.pickerStyle(.segmented)
+                SearchField(text:$query,prompt:"Pesquisar perfis")
+                ChipRow {
+                    ForEach(["Rever","Manter","Remover","Todos"],id:\.self) { value in Chip(title:value,selected:filter==value){filter=value} }
+                }
+                HStack(spacing:10) {
+                    Menu {
+                        Picker("Relação",selection:$relationship){ForEach(["Todos","Mútuos","Não me seguem","Eu não sigo"],id:\.self){Text(RelationFilter.label($0)).tag($0)}}
+                        if mode=="followers" {
+                            Button("Marcar seguidores que não sigo",systemImage:"person.badge.minus") {
+                                let ids=Set(model.relations.filter{$0.follows && !$0.following && !store.protectedIDs.contains($0.id)}.map(\.id))
+                                mark(ids,"remove");selected=ids;filter="Remover"
+                            }
+                        }
+                        Button("Círculo real · análise de ligações",systemImage:"circle.hexagongrid"){intelligence=true}
+                    } label: {
+                        Label(RelationFilter.label(relationship),systemImage:"line.3.horizontal.decrease.circle").font(.footnote.weight(.semibold))
+                    }
+                    Spacer()
+                    if !selected.isEmpty {
+                        Menu("Decidir \(selected.count)") {
+                            Button("Manter",systemImage:"shield"){mark(selected,"keep");selected=[]}
+                            Button("Rever depois",systemImage:"clock"){mark(selected,"review");selected=[]}
+                            Button("Marcar para remover",systemImage:"minus.circle"){mark(selected,"remove")}
+                        }
+                        .font(.footnote.weight(.semibold))
+                    }
+                    Button(selected.isEmpty ? "Selecionar":"Limpar"){selected=selected.isEmpty ? Set(people.filter{!kept($0)}.map(\.id)):[]}
+                        .font(.footnote.weight(.semibold)).disabled(store.operationRunning)
+                }
+            }
             if !model.relationsReady {
-                ContentUnavailableView("Começa com um check",systemImage:"person.2",description:Text("Precisamos de uma lista completa para rever as relações."))
-                Button("Analisar conta",action:model.scan).disabled(!model.canScan)
+                EmptyState(icon:"person.2",title:"Começa com um check",message:"Precisamos de uma lista completa para rever as relações.",actionTitle:"Verificar agora",action:model.scan)
+                    .disabled(!model.canScan).surface(padding:0)
             }
             ScrollView {
-                LazyVStack(spacing:10) {
+                LazyVStack(spacing:0) {
                     ForEach(people){person in
                         HStack(spacing:10) {
-                            Button {if selected.contains(person.id){selected.remove(person.id)}else{selected.insert(person.id)}} label:{Image(systemName:selected.contains(person.id) ? "checkmark.circle.fill":"circle").font(.title2).frame(width:34,height:44)}.disabled(kept(person)||store.operationRunning)
-                            ProfileAvatar(photoURL:person.photoURL,size:40)
+                            Button {if selected.contains(person.id){selected.remove(person.id)}else{selected.insert(person.id)}} label:{
+                                Image(systemName:selected.contains(person.id) ? "checkmark.circle.fill":"circle").font(.title2)
+                                    .foregroundStyle(selected.contains(person.id) ? Theme.signalInk:Theme.ink3).frame(width:32,height:44)
+                            }.buttonStyle(.plain).disabled(kept(person)||store.operationRunning)
+                            ProfileAvatar(photoURL:person.photoURL,size:42,name:person.username)
                             Button {profile=person} label:{
-                                VStack(alignment:.leading,spacing:5) {Text("@"+person.username).font(.subheadline.bold());Text(person.name).font(.caption2).foregroundStyle(.secondary)}
-                                    .frame(maxWidth:.infinity,alignment:.leading)
+                                VStack(alignment:.leading,spacing:3) {
+                                    Text("@"+person.username).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                                    HStack(spacing:6) {
+                                        RelationBadge(kind:RelationKind(person))
+                                        if decisions[person.id] as? String == "remove" {Text("A remover").font(.caption2.weight(.semibold)).foregroundStyle(Theme.loss)}
+                                    }
+                                }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                             Button {keep(person)} label:{
-                                Image(systemName:kept(person) ? "shield.fill":"shield").foregroundStyle(kept(person) ? FCStyle.mint:FCStyle.accent).frame(width:44,height:44)
-                            }.disabled(store.busy || store.protectedIDs.contains(person.id)).accessibilityLabel(kept(person) ? "Marcado para manter":"Marcar para manter")
-                        }.padding(10).background(FCStyle.card,in:.rect(cornerRadius:15))
+                                Image(systemName:kept(person) ? "shield.fill":"shield").foregroundStyle(kept(person) ? Theme.signalInk:Theme.ink3).frame(width:44,height:44)
+                            }.buttonStyle(.plain).disabled(store.busy || store.protectedIDs.contains(person.id)).accessibilityLabel(kept(person) ? "Marcado para manter":"Marcar para manter")
+                        }
+                        .padding(.leading,10).padding(.vertical,4)
+                        Divider().overlay(Theme.line).padding(.leading,94)
                     }
-                    if model.relationsReady && people.isEmpty {ContentUnavailableView("Nada nesta lista",systemImage:"checkmark.circle",description:Text("Experimenta outro filtro."))}
+                    if model.relationsReady && people.isEmpty {EmptyState(icon:"checkmark.circle",title:"Nada nesta lista",message:"Experimenta outro filtro.")}
                 }
+                .surface(padding:0)
             }
             if store.operationRunning {
-                ProgressView(value:Double(store.operationDone),total:Double(max(1,store.operationTotal)))
-                Button("Parar fila"){store.operationPaused=true}
+                VStack(alignment:.leading,spacing:8) {
+                    ProgressView(value:Double(store.operationDone),total:Double(max(1,store.operationTotal))).tint(Theme.signalInk)
+                    Button("Parar fila"){store.operationPaused=true}.buttonStyle(QuietButtonStyle())
+                }
             } else {
-                Button {review=true} label:{HStack{Image(systemName:"person.badge.minus");Text("Rever \(selected.count) ações");Spacer();Image(systemName:"arrow.right")}.font(.subheadline.bold()).padding(16).foregroundStyle(.white).background(FCStyle.gradient,in:.rect(cornerRadius:15))}
-                    .buttonStyle(PressStyle()).disabled(selected.isEmpty || !model.sessionAvailable || model.watchlistBlocked || store.busy)
+                Button {review=true} label:{Label(selected.isEmpty ? "Seleciona perfis para rever" : mode=="following" ? "Rever \(selected.count) para deixar de seguir" : "Rever \(selected.count) seguidores a remover",systemImage:"arrow.right")}
+                    .buttonStyle(SignalButtonStyle())
+                    .disabled(selected.isEmpty || !model.sessionAvailable || model.watchlistBlocked || store.busy)
             }
-        }.padding(20).background(FCStyle.background)
+        }.padding(20).background(Theme.canvas)
         .task{await store.load();model.loadRelations()}
         .onChange(of:mode){_,_ in selected=[]}
         .onChange(of:model.accountId){_,_ in selected=[];Task{await store.load()}}
         .sheet(item:$profile){ProfileNotes(store:store,person:$0)}
         .sheet(isPresented:$review){NativeActionReview(model:model,people:model.relations.filter{selected.contains($0.id) && !kept($0)},action:mode=="following" ? "unfollow":"removeFollower")}
-        .sheet(isPresented:$intelligence){NavigationStack{RelationshipIntelligence(model:model).toolbar{ToolbarItem(placement:.confirmationAction){Button("Concluído"){intelligence=false}}}}}
+        .sheet(isPresented:$intelligence){NavigationStack{RelationshipIntelligence(model:model).toolbar{ToolbarItem(placement:.confirmationAction){Button("Concluído"){intelligence=false}}}}.tint(Theme.signalInk)}
     }
 }
 
@@ -430,163 +455,233 @@ extension NativeTool {
 }
 
 struct ToolsView: View {
-    let model:AppModel
-    @State private var query=""
-    @State private var category="Todas"
-    @State private var selected:NativeTool?
-    @State private var settings=false
-    @State private var newTask=false
-    @State private var pendingTask:NativeTool?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var store:NativeToolsStore {model.tools}
-    private let featuredIDs=["watchlist","hashtag-radar","comment-dm","publish","cleanup"]
-    private var filtering:Bool {!query.isEmpty || category != "Todas"}
-    private var visible:[NativeTool] {
-        NativeTool.all.filter {
-            (category=="Todas" || category=="Favoritos" && store.favorites.contains($0.id) || $0.category==category) &&
-            (query.isEmpty || "\($0.name) \($0.detail) \($0.category)".localizedCaseInsensitiveContains(query)) &&
-            (filtering || !featuredIDs.contains($0.id))
-        }.sorted {
-            if store.favorites.contains($0.id) != store.favorites.contains($1.id) {return store.favorites.contains($0.id)}
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
+    let model: AppModel
+    @State private var query = ""
+    @State private var selected: NativeTool?
+    @State private var settings = false
+    @State private var diagnostics = false
+    private var store: NativeToolsStore { model.tools }
+    private var connected: Bool { store.config["configured"] as? Bool == true }
+    private var results: [NativeTool] {
+        NativeTool.all.filter { "\($0.name) \($0.detail) \($0.category)".localizedCaseInsensitiveContains(query) }
     }
-    private var columns:[GridItem] {[GridItem(.adaptive(minimum:155),spacing:12)]}
-    private func open(_ tool:NativeTool) {
-        if tool.id == "watchlist" { model.select(.watchlist);Task {await store.remember(tool.id)};return }
-        selected=tool
-        Task {await store.remember(tool.id)}
+    private var everyday: [NativeTool] {
+        NativeTool.all.filter { !$0.professional && !["watchlist", "reports", "history"].contains($0.id) }
     }
-    var body:some View {
+    private var professional: [NativeTool] { NativeTool.all.filter(\.professional) }
+    private var favorites: [NativeTool] { NativeTool.all.filter { store.favorites.contains($0.id) } }
+    private func open(_ tool: NativeTool) {
+        Task { await store.remember(tool.id) }
+        if tool.id == "watchlist" { model.select(.watchlist); return }
+        selected = tool
+    }
+    private func tool(_ id: String) -> NativeTool? { NativeTool.all.first { $0.id == id } }
+
+    var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:22) {
-                VStack(alignment:.leading,spacing:8) {
-                    Text("FOLLOWCHECK").font(.caption2.bold()).tracking(2).foregroundStyle(FCStyle.accent)
-                    Text("Mais").font(.largeTitle.bold())
-                    Text("Ferramentas e opções adicionais, organizadas num único lugar.").font(.subheadline).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 26) {
+                ScreenHeader(title: "Mais", subtitle: "Ferramentas, dados e definições.") {
+                    IconButton(systemName: "gearshape", label: "Definições") { settings = true }
                 }
-                HStack(spacing:10) {
-                    Button {settings=true} label:{Label("Definições",systemImage:"slider.horizontal.3").font(.subheadline.weight(.semibold)).frame(maxWidth:.infinity,minHeight:44).background(FCStyle.card,in:.rect(cornerRadius:12))}
-                    Button {newTask=true} label:{Label("Nova tarefa",systemImage:"plus").font(.subheadline.weight(.semibold)).frame(maxWidth:.infinity,minHeight:44).foregroundStyle(.white).background(FCStyle.gradient,in:.rect(cornerRadius:12))}
-                }.buttonStyle(PressStyle())
-                HStack(spacing:12) {
-                    Image(systemName:"magnifyingglass").foregroundStyle(FCStyle.accent)
-                    TextField("Ferramentas, ações ou objetivos",text:$query).font(.subheadline)
-                    if !query.isEmpty {Button {query=""} label:{Image(systemName:"xmark.circle.fill")}.accessibilityLabel("Limpar pesquisa")}
-                }.padding(15).background(FCStyle.card,in:.rect(cornerRadius:13))
-                    .overlay(RoundedRectangle(cornerRadius:13).strokeBorder(FCStyle.accent.opacity(0.4)))
+                SearchField(text: $query, prompt: "Procurar ferramenta ou ação")
                 taskStrip
-                if !filtering {
-                    heading("Ferramentas principais","\(NativeTool.all.count) ferramentas")
-                    LazyVGrid(columns:columns,spacing:12) {
-                        ForEach(NativeTool.all.filter{featuredIDs.contains($0.id)}) {tool in card(tool,featured:true)}
+                if !query.isEmpty {
+                    if results.isEmpty {
+                        EmptyState(icon: "magnifyingglass", title: "Nenhuma ferramenta encontrada", message: "Experimenta outro termo, como “seguir”, “exportar” ou “mensagens”.")
+                            .surface(padding: 0)
+                    } else {
+                        group { ForEach(results) { row($0) } }
                     }
+                } else {
                     if !store.recentTools.isEmpty {
-                        heading("Recentes","À distância de um toque")
-                        ScrollView(.horizontal,showsIndicators:false) {
-                            HStack(spacing:9){ForEach(store.recentTools){tool in Button {open(tool)} label:{Label(tool.name,systemImage:tool.icon).font(.caption.weight(.medium)).padding(12).background(FCStyle.card,in:.capsule)}.buttonStyle(PressStyle())}}
+                        VStack(alignment: .leading, spacing: 10) {
+                            Eyebrow(text: "Recentes")
+                            ChipRow {
+                                ForEach(store.recentTools) { tool in
+                                    Button { open(tool) } label: {
+                                        Label(tool.name, systemImage: tool.icon).font(.subheadline.weight(.medium)).foregroundStyle(Theme.ink)
+                                            .padding(.horizontal, 14).frame(minHeight: 38)
+                                            .background(Theme.surface, in: .capsule).overlay(Capsule().strokeBorder(Theme.line))
+                                    }
+                                    .buttonStyle(PressStyle())
+                                }
+                            }
                         }
                     }
-                }
-                heading(filtering ? "Resultados":"Mais ferramentas",filtering ? "\(visible.count) ferramentas":"Explora o teu workspace")
-                ScrollView(.horizontal,showsIndicators:false) {
-                    HStack(spacing:7) {
-                        ForEach(["Todas","Favoritos","Descoberta","Crescimento","Audiência","Engagement","Inbox","Conteúdo","Inteligência","Organização","Integrações"],id:\.self){name in
-                            Button {withAnimation(reduceMotion ? nil:.easeInOut(duration:0.2)){category=name}} label:{
-                                Text(name).font(.caption.weight(.medium)).padding(.horizontal,13).padding(.vertical,10)
-                                    .background(category==name ? FCStyle.accent.opacity(0.15):FCStyle.card,in:.capsule)
-                                    .overlay(Capsule().strokeBorder(category==name ? FCStyle.accent.opacity(0.45):.white.opacity(0.07)))
-                            }.buttonStyle(.plain).foregroundStyle(category==name ? FCStyle.accent:.secondary)
+                    if !favorites.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionHeader(title: "Favoritos")
+                            group { ForEach(favorites) { row($0) } }
                         }
                     }
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "A tua conta")
+                        group {
+                            linkRow(icon: "bubble.left.and.bubble.right", title: "Inbox", detail: "Conversas e pedidos de mensagem") { model.select(.inbox) }
+                            if let reports = tool("reports") { row(reports) }
+                            if let history = tool("history") { row(history) }
+                            linkRow(icon: "list.bullet.rectangle", title: "Centro de operações", detail: "Filas de ações e o estado de cada perfil") {
+                                selected = NativeTool(id: "operations", name: "Centro de operações", detail: "", category: "Organização", icon: "list.bullet.rectangle", professional: false)
+                            }
+                            linkRow(icon: "stethoscope", title: "Diagnóstico", detail: "Eventos técnicos, sem passwords nem cookies") { diagnostics = true }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Ferramentas")
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
+                            ForEach(everyday) { card($0) }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline) {
+                            SectionHeader(title: "Conta profissional")
+                            StatusPill(text: connected ? "Ligada" : "Por ligar", tone: connected ? .gain : .neutral)
+                        }
+                        if !connected {
+                            Text("Publicação, comentários, automações e analytics usam a integração Zernio. Liga-a a partir de qualquer uma destas ferramentas.")
+                                .font(.footnote).foregroundStyle(Theme.ink2)
+                        }
+                        group { ForEach(professional) { row($0) } }
+                    }
                 }
-                LazyVGrid(columns:columns,spacing:12){ForEach(visible){tool in card(tool,featured:false)}}
-                if visible.isEmpty {ContentUnavailableView("Nenhuma ferramenta encontrada",systemImage:"magnifyingglass",description:Text("Experimenta outro termo ou categoria."))}
-            }.padding(20).frame(maxWidth:900).frame(maxWidth:.infinity)
-        }.background(FCStyle.background).scrollIndicators(.hidden)
-        .task{await store.load();model.loadRelations()}
+            }
+            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 28)
+            .frame(maxWidth: 760).frame(maxWidth: .infinity)
+        }
+        .background(Theme.canvas).scrollIndicators(.hidden)
+        .task { await store.load(); model.loadRelations() }
         .onAppear {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--preview-cleanup") {selected=NativeTool.all.first{$0.id=="cleanup"}}
-            if ProcessInfo.processInfo.arguments.contains(where:{["--preview-intelligence","--preview-memories"].contains($0)}) {selected=NativeTool(id:"relationship-intelligence",name:"Círculo real",detail:"",category:"Audiência",icon:"person.2",professional:false)}
-            if ProcessInfo.processInfo.arguments.contains("--preview-calendar") {selected=NativeTool.all.first{$0.id=="calendar"}}
-            if ProcessInfo.processInfo.arguments.contains("--preview-operations") {selected=NativeTool(id:"operations",name:"Operações",detail:"",category:"Audiência",icon:"list.bullet",professional:false)}
+            if ProcessInfo.processInfo.arguments.contains("--preview-cleanup") { selected = NativeTool.all.first { $0.id == "cleanup" } }
+            if ProcessInfo.processInfo.arguments.contains(where: { ["--preview-intelligence", "--preview-memories"].contains($0) }) { selected = NativeTool(id: "relationship-intelligence", name: "Círculo real", detail: "", category: "Audiência", icon: "person.2", professional: false) }
+            if ProcessInfo.processInfo.arguments.contains("--preview-calendar") { selected = NativeTool.all.first { $0.id == "calendar" } }
+            if ProcessInfo.processInfo.arguments.contains("--preview-operations") { selected = NativeTool(id: "operations", name: "Centro de operações", detail: "", category: "Organização", icon: "list.bullet.rectangle", professional: false) }
             #endif
         }
-        .sheet(item:$selected){ToolDestination(model:model,tool:$0)}
-        .sheet(isPresented:$settings){SessionView(model:model)}
-        .sheet(isPresented:$newTask,onDismiss:{if let tool=pendingTask {pendingTask=nil;open(tool)}}){
+        .sheet(item: $selected) { ToolDestination(model: model, tool: $0) }
+        .sheet(isPresented: $settings) { SessionView(model: model) }
+        .sheet(isPresented: $diagnostics) {
             NavigationStack {
-                List(NativeTool.all.filter{["cleanup","follow","unfollow","follow-back","publish","watchlist","calendar"].contains($0.id)}){tool in
-                    Button {pendingTask=tool;newTask=false} label:{Label(tool.name,systemImage:tool.icon).padding(.vertical,8)}
-                }.navigationTitle("Nova tarefa").toolbar{ToolbarItem(placement:.confirmationAction){Button("Fechar"){newTask=false}}}
-            }.presentationDetents([.medium,.large])
-        }
-        .alert("FollowCheck",isPresented:Binding(get:{store.error != nil},set:{if !$0{store.error=nil}})){Button("OK"){store.error=nil}}message:{Text(store.error ?? "")}
-    }
-    private var taskStrip:some View {
-        Button {
-            if model.checkIsRunning {model.select(model.activeCheckScope=="watchlist" ? .watchlist:.home)}
-            else {selected=NativeTool(id:"operations",name:"Centro de operações",detail:"",category:"Organização",icon:"list.bullet.rectangle",professional:false)}
-        } label:{
-            HStack(spacing:12) {
-                Image(systemName:model.checkIsRunning || store.operationRunning ? "waveform.path":"clock")
-                    .font(.title3).frame(width:40,height:40).background(FCStyle.accent.opacity(0.1),in:.rect(cornerRadius:11))
-                VStack(alignment:.leading,spacing:4) {
-                    Text("CENTRO DE TAREFAS").font(.system(size:9,weight:.bold)).tracking(1.3).foregroundStyle(FCStyle.accent)
-                    Text(store.operationRunning ? "@"+store.operationCurrent : model.checkIsRunning ? model.statusText:"Nenhuma tarefa a executar").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    Text(store.operationRunning ? "\(store.operationDone) / \(store.operationTotal) confirmados":model.checkIsRunning ? model.detailText:"Scans, filas e histórico num só lugar.").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-                    if store.operationRunning {ProgressView(value:Double(store.operationDone),total:Double(max(1,store.operationTotal)))}
-                }
-                Spacer(minLength:0);Image(systemName:"chevron.right").font(.caption)
-            }.padding(14).background(LinearGradient(colors:[FCStyle.accent.opacity(0.08),FCStyle.card],startPoint:.leading,endPoint:.trailing),in:.rect(cornerRadius:14))
-                .overlay(RoundedRectangle(cornerRadius:14).strokeBorder(.white.opacity(0.08)))
-        }.buttonStyle(PressStyle())
-    }
-    private func heading(_ title:String,_ detail:String)->some View {
-        VStack(alignment:.leading,spacing:5){Text(title).font(.headline);Text(detail).font(.caption).foregroundStyle(.secondary)}
-    }
-    private func card(_ tool:NativeTool,featured:Bool)->some View {
-        ClassicToolCard(tool:tool,favorite:store.favorites.contains(tool.id),connected:store.config["configured"] as? Bool == true,featured:featured,
-            onOpen:{open(tool)},onFavorite:{Task{await store.favorite(tool.id)}})
-    }
-}
-
-private struct ClassicToolCard: View {
-    let tool:NativeTool
-    let favorite:Bool
-    let connected:Bool
-    let featured:Bool
-    let onOpen:()->Void
-    let onFavorite:()->Void
-    private var tone:Color {
-        switch tool.id {case "cleanup":return FCStyle.mint;case "comment-dm":return FCStyle.pink;case "publish":return .blue;default:return FCStyle.accent}
-    }
-    var body:some View {
-        VStack(alignment:.leading,spacing:10) {
-            HStack {
-                Image(systemName:tool.icon).font(.title3).foregroundStyle(tone).frame(width:40,height:40)
-                    .background(tone.opacity(0.1),in:.rect(cornerRadius:11))
-                    .overlay(RoundedRectangle(cornerRadius:11).strokeBorder(tone.opacity(0.24)))
-                Spacer(minLength:0)
-                Button(action:onFavorite){Image(systemName:favorite ? "star.fill":"star").font(.subheadline).foregroundStyle(favorite ? FCStyle.accent:.gray).frame(width:44,height:44)}
-                    .accessibilityLabel((favorite ? "Remover favorito: ":"Adicionar favorito: ")+tool.name)
+                DiagnosticView(model: model)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fechar") { diagnostics = false } } }
             }
-            Button(action:onOpen) {
-                VStack(alignment:.leading,spacing:7) {
-                    Text(tool.category.uppercased()).font(.system(size:9,weight:.semibold)).tracking(0.8).foregroundStyle(.secondary)
-                    Text(tool.name).font(.subheadline.bold()).foregroundStyle(.primary).fixedSize(horizontal:false,vertical:true)
-                    Text(tool.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(featured ? 4:3).frame(maxWidth:.infinity,alignment:.leading)
-                    Spacer(minLength:8)
-                    HStack(spacing:5) {
-                        Image(systemName:tool.professional && !connected ? "link":"circle.fill").font(.system(size:6)).foregroundStyle(tool.professional && !connected ? .orange:FCStyle.mint)
-                        Text(tool.professional && !connected ? "Ligar integração":"Abrir").font(.caption2).foregroundStyle(.secondary)
-                        Spacer(minLength:0);Image(systemName:"arrow.right").font(.caption).foregroundStyle(tone)
+            .tint(Theme.signalInk)
+        }
+        .alert("FollowCheck", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+            Button("OK") { store.error = nil }
+        } message: { Text(store.error ?? "") }
+    }
+
+    private func group<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }.surface(padding: 0)
+    }
+
+    private var taskStrip: some View {
+        Button {
+            if model.checkIsRunning { model.select(model.activeCheckScope == "watchlist" ? .watchlist : .home) }
+            else { selected = NativeTool(id: "operations", name: "Centro de operações", detail: "", category: "Organização", icon: "list.bullet.rectangle", professional: false) }
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    if model.checkIsRunning || store.operationRunning { ProgressView().tint(Theme.onSignal) }
+                    else { Image(systemName: "checkmark").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.onSignal) }
+                }
+                .frame(width: 40, height: 40).background(Theme.signal, in: .circle)
+                VStack(alignment: .leading, spacing: 3) {
+                    Eyebrow(text: "Centro de tarefas")
+                    Text(store.operationRunning ? "@" + store.operationCurrent : model.checkIsRunning ? model.statusText : "Nenhuma tarefa em curso")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                    Text(store.operationRunning ? "\(store.operationDone) de \(store.operationTotal) confirmados" : model.checkIsRunning ? model.detailText : "Checks, filas e histórico num só lugar.")
+                        .font(.footnote).foregroundStyle(Theme.ink2).lineLimit(2)
+                    if store.operationRunning {
+                        ProgressView(value: Double(store.operationDone), total: Double(max(1, store.operationTotal))).tint(Theme.signalInk)
                     }
-                }.frame(maxWidth:.infinity,minHeight:featured ? 137:115,alignment:.topLeading).contentShape(Rectangle())
-            }.buttonStyle(PressStyle()).accessibilityLabel("Abrir "+tool.name)
-        }.padding(14).background(LinearGradient(colors:[FCStyle.card,FCStyle.background],startPoint:.topLeading,endPoint:.bottomTrailing),in:.rect(cornerRadius:15))
-            .overlay(RoundedRectangle(cornerRadius:15).strokeBorder(.white.opacity(0.09)))
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+            }
+            .surface(padding: 14, radius: 20)
+        }
+        .buttonStyle(PressStyle())
+    }
+
+    private func iconTile(_ icon: String, professional: Bool = false) -> some View {
+        Image(systemName: icon).font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(professional ? Theme.reach : Theme.signalInk)
+            .frame(width: 36, height: 36)
+            .background((professional ? Theme.reach : Theme.signal).opacity(0.14), in: .rect(cornerRadius: 10, style: .continuous))
+    }
+
+    private func linkRow(icon: String, title: String, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                iconTile(icon)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                    Text(detail).font(.footnote).foregroundStyle(Theme.ink2).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func row(_ tool: NativeTool) -> some View {
+        Button { open(tool) } label: {
+            HStack(spacing: 12) {
+                iconTile(tool.icon, professional: tool.professional)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(tool.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        if store.favorites.contains(tool.id) { Image(systemName: "star.fill").font(.caption2).foregroundStyle(Theme.caution) }
+                    }
+                    Text(tool.detail).font(.footnote).foregroundStyle(Theme.ink2).lineLimit(2)
+                }
+                Spacer(minLength: 0)
+                if tool.professional && !connected {
+                    Image(systemName: "link").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+                        .accessibilityLabel("Requer integração")
+                }
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.ink3)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu { favoriteButton(tool) }
+    }
+
+    private func card(_ tool: NativeTool) -> some View {
+        Button { open(tool) } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    iconTile(tool.icon)
+                    Spacer()
+                    if store.favorites.contains(tool.id) { Image(systemName: "star.fill").font(.caption).foregroundStyle(Theme.caution) }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(tool.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                    Text(tool.detail).font(.footnote).foregroundStyle(Theme.ink2).lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+            .surface(padding: 14, radius: 18)
+        }
+        .buttonStyle(PressStyle())
+        .contextMenu { favoriteButton(tool) }
+        .accessibilityHint("Mantém premido para adicionar aos favoritos")
+    }
+
+    private func favoriteButton(_ tool: NativeTool) -> some View {
+        Button(store.favorites.contains(tool.id) ? "Remover dos favoritos" : "Adicionar aos favoritos",
+               systemImage: store.favorites.contains(tool.id) ? "star.slash" : "star") {
+            Task { await store.favorite(tool.id) }
+        }
     }
 }
 
@@ -617,7 +712,7 @@ struct ToolDestination: View {
             .task {await model.tools.load()}
             .toolbar { ToolbarItem(placement:.confirmationAction){Button("Fechar"){dismiss()}} }
             .alert("FollowCheck",isPresented:Binding(get:{model.tools.error != nil},set:{if !$0 {model.tools.error=nil}})) { Button("OK"){model.tools.error=nil} } message:{Text(model.tools.error ?? "")}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -634,102 +729,226 @@ struct OperationStudio: View {
     @State private var profile: AppModel.Relation?
     @State private var onlyUnprotected = false
     @State private var relationshipFilter = "Todos"
-    private var actionTitle: String { ["mute":"Silenciar publicações e Stories","follow":"Seguir","unfollow":"Deixar de seguir","removeFollower":"Remover seguidores","disconnect":"Remover ligação nos dois sentidos"][action] ?? "Ação" }
-    private let relationshipFilters = ["Não me seguem","Eu não sigo","Mútuos","Seguidores","A seguir","Todos"]
+    private var actionTitle: String { ["mute": "Silenciar publicações e Stories", "follow": "Seguir", "unfollow": "Deixar de seguir", "removeFollower": "Remover seguidor", "disconnect": "Remover nos dois sentidos"][action] ?? "Ação" }
+    private let relationshipFilters = ["Não me seguem", "Eu não sigo", "Mútuos", "Seguidores", "A seguir", "Todos"]
     private func selectable(_ person: AppModel.Relation) -> Bool {
         person.canPerform(action) && !store.protectedIDs.contains(person.id)
     }
     private var store: NativeToolsStore { model.tools }
-    private var people: [AppModel.Relation] {
-        let existing=Set(model.relations.map(\.id))
-        return (model.relations + imported.filter{!existing.contains($0.id)}).filter { person in
-            let match: Bool
+    private var pool: [AppModel.Relation] {
+        let existing = Set(model.relations.map(\.id))
+        return (model.relations + imported.filter { !existing.contains($0.id) }).filter { person in
             switch tool.id {
-            case "follow": match = !person.following
-            case "follow-back": match = person.follows && !person.following
-            case "unfollow": match = person.following
-            case "remove-followers": match = person.follows
-            case "competitors": match = store.metadata[person.id]?["watchlist"] as? Bool == true
-            default: match = true
+            case "follow": return !person.following
+            case "follow-back": return person.follows && !person.following
+            case "unfollow": return person.following
+            case "remove-followers": return person.follows
+            case "competitors": return store.metadata[person.id]?["watchlist"] as? Bool == true
+            default: return true
             }
-            let tags=(store.metadata[person.id]?["tags"] as? [String] ?? []).joined(separator:" ")
-            return match && person.matches(relationshipFilter) && (query.isEmpty || "\(person.username) \(person.name) \(tags)".localizedCaseInsensitiveContains(query)) && (!onlyUnprotected || !store.protectedIDs.contains(person.id))
         }
     }
+    private var people: [AppModel.Relation] {
+        pool.filter { person in
+            let tags = (store.metadata[person.id]?["tags"] as? [String] ?? []).joined(separator: " ")
+            return person.matches(relationshipFilter) && (query.isEmpty || "\(person.username) \(person.name) \(tags)".localizedCaseInsensitiveContains(query)) && (!onlyUnprotected || !store.protectedIDs.contains(person.id))
+        }
+    }
+
     var body: some View {
-        VStack(spacing:16) {
-            ScrollView(.horizontal,showsIndicators:false) {
-                HStack {
-                    ForEach(relationshipFilters,id:\.self) { filter in
-                        Button { relationshipFilter=filter } label: {
-                            Text(filter).font(.subheadline.weight(.medium)).padding(.horizontal,14).padding(.vertical,10)
-                                .background(relationshipFilter==filter ? FCStyle.accent.opacity(0.25):FCStyle.card,in:.capsule)
-                        }.buttonStyle(.plain).foregroundStyle(relationshipFilter==filter ? FCStyle.accent:.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 12) {
+                SearchField(text: $query, prompt: "Nome, username ou etiqueta")
+                ChipRow {
+                    ForEach(relationshipFilters, id: \.self) { filter in
+                        Chip(title: RelationFilter.label(filter), count: model.relationsReady ? pool.filter { $0.matches(filter) }.count : nil, selected: relationshipFilter == filter) {
+                            relationshipFilter = filter
+                        }
                     }
                 }
+                Text(RelationFilter.explanation(relationshipFilter)).font(.footnote).foregroundStyle(Theme.ink2)
+                if tool.id == "follow" { lookup }
             }
-            Text(relationshipFilter == "Não me seguem" ? "Contas que segues e que não te seguem de volta." : relationshipFilter == "Eu não sigo" ? "Contas que te seguem, mas que tu não segues." : "Seleciona perfis desta lista e revê a ação antes de executar.")
-                .font(.caption).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
-            HStack { Image(systemName:"magnifyingglass"); TextField("Nome ou username",text:$query).textInputAutocapitalization(.never) }.padding(14).background(FCStyle.card,in:.rect(cornerRadius:16))
-            if tool.id == "follow" {
-                HStack {
-                    TextField("Usernames separados por vírgula",text:$usernames).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("Identificar") { Task {
-                        importing=true;defer{importing=false}
-                        do {
-                            for name in usernames.split(whereSeparator:{$0.isWhitespace||$0==","||$0==";"}) {
-                                let result=try await store.request("lookup",["username":String(name).replacingOccurrences(of:"@",with:"")])
-                                if let data=result["person"] as? [String:Any] {let person=AppModel.Relation(data);if !imported.contains(where:{$0.id==person.id}){imported.append(person)}}
-                            }
-                            usernames=""
-                        } catch {store.error=error.localizedDescription}
-                    }}.disabled(importing||usernames.isEmpty)
-                }.font(.subheadline)
-                if importing {ProgressView("A identificar perfis…")}
-            }
-            Toggle("Mostrar apenas não protegidos",isOn:$onlyUnprotected).font(.subheadline)
-            HStack {
-                Text("\(people.count) perfis · \(selected.count) selecionados").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button(selected.isEmpty ? "Selecionar visíveis" : "Limpar") {
-                    selected = selected.isEmpty ? Set(people.filter{selectable($0)}.map(\.id)) : []
-                }.font(.caption).disabled(store.operationRunning)
-            }
-            if !model.relationsReady { ContentUnavailableView("Primeiro, analisa a conta",systemImage:"person.2",description:Text("Não há ainda uma lista completa guardada para preparar ações.")); Button("Analisar agora",action:model.scan).disabled(!model.canScan) }
-            ScrollView {
-                LazyVStack(spacing:10) {
-                    ForEach(people) { person in
-                        HStack(spacing:12) {
-                            Button { if selected.contains(person.id){selected.remove(person.id)}else{selected.insert(person.id)} } label:{Image(systemName:selected.contains(person.id) ? "checkmark.circle.fill":"circle").font(.title2)}.disabled(!selectable(person)||store.operationRunning)
-                            ProfileAvatar(photoURL:person.photoURL,size:40)
-                            Button {profile=person} label:{VStack(alignment:.leading,spacing:4){Text("@\(person.username)").font(.subheadline.bold());Text(person.name).font(.caption).foregroundStyle(.secondary);Text(person.follows && person.following ? "Mútuos" : person.following ? "Não te segue" : "Tu não segues").font(.caption2).foregroundStyle(FCStyle.accent)}.frame(maxWidth:.infinity,alignment:.leading)}.buttonStyle(.plain)
-                            Button { Task { await store.protect(person.id);selected.remove(person.id) } } label:{Image(systemName:store.protectedIDs.contains(person.id) ? "shield.fill":"shield").frame(width:40,height:44)}.disabled(store.busy).accessibilityLabel("Proteger \(person.username)")
-                        }.padding(12).background(FCStyle.card,in:.rect(cornerRadius:18))
-                    }
+            .padding(.horizontal, 20).padding(.top, 14)
+            if !model.relationsReady {
+                ScrollView {
+                    EmptyState(icon: "person.2", title: "Primeiro, analisa a conta",
+                               message: "Ainda não há uma lista completa guardada. Um check recolhe seguidores e contas seguidas para as poderes rever aqui.",
+                               actionTitle: "Verificar agora", action: model.scan)
+                        .disabled(!model.canScan)
+                        .surface(padding: 0)
+                        .padding(.horizontal, 20).padding(.top, 8)
                 }
-            }
-            if let person=store.failedPerson,let encoded=person.username.addingPercentEncoding(withAllowedCharacters:.alphanumerics),let url=URL(string:"https://www.instagram.com/"+encoded+"/") {
-                VStack(alignment:.leading,spacing:8) {
-                    Text("Ação automática não confirmada para @\(person.username)").font(.subheadline.bold())
-                    Link("Abrir perfil no Instagram",destination:url)
-                    Text("Podes concluir a ação no perfil. A lista apresenta os dados do último scan; abrir o perfil não marca a ação como concluída.").font(.caption).foregroundStyle(.secondary)
-                }.padding(12).background(FCStyle.card,in:.rect(cornerRadius:16))
-            }
-            if store.operationRunning {
-                ProgressView(value:Double(store.operationDone),total:Double(max(1,store.operationTotal)))
-                Button("Parar após a operação atual"){store.operationPaused=true}
             } else {
-                Picker("Ação",selection:$action){Text("Seguir").tag("follow");Text("Deixar de seguir").tag("unfollow");Text("Remover seguidor").tag("removeFollower");Text("Remover ligação nos dois sentidos").tag("disconnect")}.pickerStyle(.menu)
-                Button("Rever \(selected.count) ações"){reviewing=true}.buttonStyle(.borderedProminent).disabled(selected.isEmpty || !model.sessionAvailable || model.watchlistBlocked || store.busy)
+                HStack(spacing: 10) {
+                    Text("\(people.count.formatted()) perfis\(selected.isEmpty ? "" : " · \(selected.count) selecionados")")
+                        .font(.footnote.weight(.medium)).foregroundStyle(Theme.ink2).monospacedDigit()
+                    Spacer()
+                    Menu {
+                        Toggle("Esconder protegidos", isOn: $onlyUnprotected)
+                    } label: {
+                        Image(systemName: onlyUnprotected ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                            .font(.title3).foregroundStyle(Theme.ink2).frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("Filtros")
+                    Button(selected.isEmpty ? "Selecionar todos" : "Limpar") {
+                        selected = selected.isEmpty ? Set(people.filter { selectable($0) }.map(\.id)) : []
+                    }
+                    .font(.footnote.weight(.semibold)).disabled(store.operationRunning)
+                }
+                .padding(.horizontal, 20)
+                ScrollView {
+                    VStack(spacing: 12) {
+                        if let person = store.failedPerson, let encoded = person.username.addingPercentEncoding(withAllowedCharacters: .alphanumerics), let url = URL(string: "https://www.instagram.com/" + encoded + "/") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                InlineNotice(text: "A ação automática não foi confirmada para @\(person.username). Podes concluí-la no perfil; abrir o perfil não a marca como concluída.")
+                                Link("Abrir perfil no Instagram", destination: url).font(.footnote.weight(.semibold))
+                            }
+                        }
+                        if people.isEmpty {
+                            EmptyState(icon: "checkmark.circle", title: "Nada nesta lista", message: query.isEmpty ? "Experimenta outro filtro." : "Nenhum perfil corresponde a “\(query)”.")
+                                .surface(padding: 0)
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                ForEach(people) { person in
+                                    personRow(person)
+                                    Divider().overlay(Theme.line).padding(.leading, 104)
+                                }
+                            }
+                            .surface(padding: 0)
+                        }
+                    }
+                    .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
+                }
+                .scrollDismissesKeyboard(.immediately)
             }
-        }.padding(20)
-        .task{await store.load()}
-        .onChange(of:relationshipFilter){_,value in if tool.id == "relations" {action = value == "Eu não sigo" ? "follow" : value == "Seguidores" ? "removeFollower":"unfollow"}}
-        .onChange(of:action){_,_ in selected.formIntersection(Set((model.relations+imported).filter{selectable($0)}.map(\.id)))}
-        .onChange(of:model.accountId){_,_ in selected=[];imported=[];store.failedPerson=nil;Task{await store.load()}}
-        .onAppear{ relationshipFilter = tool.id == "relations" ? model.requestedRelationFilter : tool.id == "unfollow" ? "Não me seguem" : tool.id == "follow-back" ? "Eu não sigo":"Todos"; action = ["follow","follow-back"].contains(tool.id) ? "follow" : tool.id == "remove-followers" ? "removeFollower":"unfollow";model.loadRelations() }
-        .sheet(isPresented:$reviewing){NativeActionReview(model:model,people:(model.relations+imported.filter{person in !model.relations.contains(where:{$0.id==person.id})}).filter{selected.contains($0.id)},action:action)}
-        .sheet(item:$profile){person in ProfileNotes(store:store,person:person)}
+        }
+        .safeAreaInset(edge: .bottom) { if model.relationsReady { actionBar } }
+        .task { await store.load() }
+        .onChange(of: relationshipFilter) { _, value in if tool.id == "relations" { action = value == "Eu não sigo" ? "follow" : value == "Seguidores" ? "removeFollower" : "unfollow" } }
+        .onChange(of: action) { _, _ in selected.formIntersection(Set((model.relations + imported).filter { selectable($0) }.map(\.id))) }
+        .onChange(of: model.accountId) { _, _ in selected = []; imported = []; store.failedPerson = nil; Task { await store.load() } }
+        .onAppear {
+            relationshipFilter = tool.id == "relations" ? model.requestedRelationFilter : tool.id == "unfollow" ? "Não me seguem" : tool.id == "follow-back" ? "Eu não sigo" : "Todos"
+            action = ["follow", "follow-back"].contains(tool.id) ? "follow" : tool.id == "remove-followers" ? "removeFollower" : relationshipFilter == "Eu não sigo" && tool.id == "relations" ? "follow" : relationshipFilter == "Seguidores" && tool.id == "relations" ? "removeFollower" : "unfollow"
+            model.loadRelations()
+        }
+        .sheet(isPresented: $reviewing) {
+            NativeActionReview(model: model, people: (model.relations + imported.filter { person in !model.relations.contains(where: { $0.id == person.id }) }).filter { selected.contains($0.id) }, action: action)
+        }
+        .sheet(item: $profile) { person in ProfileNotes(store: store, person: person) }
+    }
+
+    private var lookup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                TextField("Usernames separados por vírgula", text: $usernames)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .padding(.horizontal, 14).frame(minHeight: 44)
+                    .background(Theme.surface, in: .rect(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.line))
+                Button("Identificar") {
+                    Task {
+                        importing = true; defer { importing = false }
+                        do {
+                            for name in usernames.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" }) {
+                                let result = try await store.request("lookup", ["username": String(name).replacingOccurrences(of: "@", with: "")])
+                                if let data = result["person"] as? [String: Any] {
+                                    let person = AppModel.Relation(data)
+                                    if !imported.contains(where: { $0.id == person.id }) { imported.append(person) }
+                                }
+                            }
+                            usernames = ""
+                        } catch { store.error = error.localizedDescription }
+                    }
+                }
+                .buttonStyle(QuietButtonStyle()).disabled(importing || usernames.isEmpty)
+            }
+            if importing { ProgressView("A identificar perfis…").font(.footnote) }
+        }
+    }
+
+    private func personRow(_ person: AppModel.Relation) -> some View {
+        let isSelected = selected.contains(person.id)
+        let isProtected = store.protectedIDs.contains(person.id)
+        let canSelect = selectable(person) && !store.operationRunning
+        return HStack(spacing: 12) {
+            Button {
+                if isSelected { selected.remove(person.id) } else { selected.insert(person.id) }
+            } label: {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title2).foregroundStyle(isSelected ? Theme.signalInk : canSelect ? Theme.ink3 : Theme.line)
+                    .frame(width: 30, height: 44)
+            }
+            .buttonStyle(.plain).disabled(!canSelect)
+            .accessibilityLabel(isSelected ? "Desselecionar @\(person.username)" : "Selecionar @\(person.username)")
+            Button { profile = person } label: {
+                HStack(spacing: 12) {
+                    ProfileAvatar(photoURL: person.photoURL, size: 44, name: person.username)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("@\(person.username)").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                        HStack(spacing: 6) {
+                            RelationBadge(kind: RelationKind(person))
+                            if !person.name.isEmpty { Text(person.name).font(.footnote).foregroundStyle(Theme.ink2).lineLimit(1) }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button { Task { await store.protect(person.id); selected.remove(person.id) } } label: {
+                Image(systemName: isProtected ? "shield.fill" : "shield")
+                    .font(.body.weight(.medium)).foregroundStyle(isProtected ? Theme.signalInk : Theme.ink3)
+                    .frame(width: 40, height: 44)
+            }
+            .buttonStyle(.plain).disabled(store.busy)
+            .accessibilityLabel(isProtected ? "Retirar proteção de @\(person.username)" : "Proteger @\(person.username)")
+        }
+        .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
+    }
+
+    private var actionBar: some View {
+        VStack(spacing: 10) {
+            if store.operationRunning {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("\(store.operationDone) de \(store.operationTotal) · @\(store.operationCurrent)").font(.footnote.weight(.semibold)).foregroundStyle(Theme.ink)
+                        Spacer()
+                        Button("Parar após a atual") { store.operationPaused = true }.font(.footnote.weight(.semibold)).foregroundStyle(Theme.loss)
+                    }
+                    ProgressView(value: Double(store.operationDone), total: Double(max(1, store.operationTotal))).tint(Theme.signalInk)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    Menu {
+                        Picker("Ação", selection: $action) {
+                            Text("Seguir").tag("follow")
+                            Text("Deixar de seguir").tag("unfollow")
+                            Text("Remover seguidor").tag("removeFollower")
+                            Text("Remover nos dois sentidos").tag("disconnect")
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(actionTitle).lineLimit(1)
+                            Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.bold))
+                        }
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 14).frame(minHeight: 44)
+                        .background(Theme.raised, in: .rect(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.line))
+                    }
+                    .accessibilityLabel("Ação: \(actionTitle)")
+                    Button(selected.isEmpty ? "Seleciona perfis" : "Rever \(selected.count)") { reviewing = true }
+                        .buttonStyle(ProminentButtonStyle())
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .disabled(selected.isEmpty || !model.sessionAvailable || model.watchlistBlocked || store.busy)
+                }
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(.bar)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 0.5) }
     }
 }
 
@@ -749,7 +968,7 @@ private struct ProfileNotes: View {
             }.navigationTitle("Perfil")
             .toolbar { ToolbarItem(placement:.confirmationAction){Button("Guardar"){Task{var data=store.metadata;var meta=data[person.id] ?? [:];meta["notes"]=notes;meta["tags"]=tags.split(separator:",").map{$0.trimmingCharacters(in:.whitespaces)};meta["watchlist"]=watched;data[person.id]=meta;await store.save("profile-meta",data);if store.error == nil {dismiss()}}}.disabled(store.busy)} }
             .onAppear{let meta=store.metadata[person.id] ?? [:];notes=meta["notes"] as? String ?? "";tags=(meta["tags"] as? [String] ?? []).joined(separator:", ");watched=meta["watchlist"] as? Bool ?? false}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -777,9 +996,9 @@ private struct ReportsStudio: View {
                     Text("\(item.value["mutual"] as? Int ?? 0) mútuos · \(item.value["nonFollowers"] as? Int ?? 0) sem reciprocidade").font(.caption)
                 }.fcCard()
             }
-            ShareLink("Exportar CSV",item:model.tools.csv).buttonStyle(.borderedProminent).disabled(!model.relationsReady)
-            ShareLink("Exportar JSON",item:json).buttonStyle(.bordered).disabled(!model.relationsReady)
-            ShareLink("Exportar diagnóstico",item:model.diagnosticReport).buttonStyle(.bordered)
+            ShareLink("Exportar CSV",item:model.tools.csv).buttonStyle(ProminentButtonStyle()).disabled(!model.relationsReady)
+            ShareLink("Exportar JSON",item:json).buttonStyle(QuietButtonStyle()).disabled(!model.relationsReady)
+            ShareLink("Exportar diagnóstico",item:model.diagnosticReport).buttonStyle(QuietButtonStyle())
         }.padding(20)}.task{model.loadRelations()}
     }
 }
@@ -802,7 +1021,7 @@ private struct HistoryStudio: View {
                 let record = item.value
                 VStack(alignment:.leading,spacing:8){
                     Text("\(record["action"] as? String ?? "Ação") · @\(record["username"] as? String ?? "")").font(.headline)
-                    Label(record["success"] as? Bool == true ? "Confirmada":"Não confirmada",systemImage:record["success"] as? Bool == true ? "checkmark.circle":"exclamationmark.circle").foregroundStyle(record["success"] as? Bool == true ? .green:.orange)
+                    Label(record["success"] as? Bool == true ? "Confirmada":"Não confirmada",systemImage:record["success"] as? Bool == true ? "checkmark.circle":"exclamationmark.circle").foregroundStyle(record["success"] as? Bool == true ? Theme.signalInk:Theme.caution)
                     Text(record["timestamp"] as? String ?? "").font(.caption).foregroundStyle(.secondary)
                     if let message=record["message"] as? String{Text(message).font(.caption).foregroundStyle(.secondary)}
                 }.frame(maxWidth:.infinity,alignment:.leading).fcCard()
@@ -872,11 +1091,11 @@ private struct LocalStudio: View {
                 DatePicker("Dia",selection:$day,displayedComponents:.date).datePickerStyle(.graphical)
                 Toggle("Mostrar todas as datas",isOn:$allDates)
             }
-            HStack(spacing:10){Image(systemName:"magnifyingglass").foregroundStyle(.secondary);TextField("Pesquisar conteúdo",text:$query)}.padding(14).background(FCStyle.card,in:.rect(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).strokeBorder(.white.opacity(0.08)))
+            HStack(spacing:10){Image(systemName:"magnifyingglass").foregroundStyle(.secondary);TextField("Pesquisar conteúdo",text:$query)}.padding(14).background(FCStyle.card,in:.rect(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).strokeBorder(Theme.line))
             if resolving {ProgressView("A identificar os perfis da coleção…")}
-            if let collectionError {Text(collectionError).foregroundStyle(.orange)}
+            if let collectionError {Text(collectionError).foregroundStyle(Theme.caution)}
             Picker("Estado",selection:$status){Text("Todos").tag("Todos");Text("Ideias").tag("idea");Text("Rascunhos").tag("draft");Text("Prontos").tag("ready");Text("Planeados").tag("planned")}.pickerStyle(.menu)
-            Button(key == "collections" ? "Criar coleção":"Novo conteúdo",systemImage:"plus"){editing=StudioRecord(value:["id":UUID().uuidString,"status":"draft"])}.buttonStyle(.borderedProminent)
+            Button(key == "collections" ? "Criar coleção":"Novo conteúdo",systemImage:"plus"){editing=StudioRecord(value:["id":UUID().uuidString,"status":"draft"])}.buttonStyle(ProminentButtonStyle())
             if store.records(key).isEmpty {ContentUnavailableView(key == "collections" ? "Cria a tua primeira coleção":"O teu próximo conteúdo começa aqui",systemImage:tool.icon)}
             ForEach(records.map{StudioRecord(value:$0)}){item in
                 VStack(alignment:.leading,spacing:12){
@@ -933,7 +1152,7 @@ private struct LocalEditor: View {
                 ToolbarItem(placement:.confirmationAction){Button("Guardar"){Task{var value=item.value;value["title"]=title;value["content"]=content;value["status"]=status;value["mediaURLs"]=mediaURLs.split(whereSeparator: \.isNewline).map(String.init);value["updatedAt"]=ISO8601DateFormatter().string(from:Date());if planned{value["scheduledFor"]=ISO8601DateFormatter().string(from:date)}else{value.removeValue(forKey:"scheduledFor")};if key == "collections" {value["usernames"]=usernames.split(whereSeparator:{$0.isWhitespace||$0==","}).map(String.init)};var values=store.records(key);if let index=values.firstIndex(where:{StudioRecord(value:$0).id==item.id}){values[index]=value}else{values.insert(value,at:0)};await store.save(key,values);if store.error == nil{dismiss()}}}.disabled(title.trimmingCharacters(in:.whitespaces).isEmpty||store.busy)}
             }
             .onAppear{title=item.title == "Registo" ? "":item.title;content=item.detail;status=item.value["status"] as? String ?? "draft";mediaURLs=(item.value["mediaURLs"] as? [String] ?? []).joined(separator:"\n");usernames=(item.value["usernames"] as? [String] ?? []).joined(separator:"\n");if let raw=item.value["scheduledFor"] as? String,let parsed=ISO8601DateFormatter().date(from:raw){date=parsed;planned=true}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -952,7 +1171,7 @@ private struct DiscoveryStudio: View {
             HStack{TextField("#hashtag",text:$tag).textInputAutocapitalization(.never).autocorrectionDisabled();Button("Pesquisar"){Task{loading=true;defer{loading=false};do{let result=try await model.tools.request("discover",["tag":tag]);people=(result["accounts"] as? [[String:Any]] ?? []).map(AppModel.Relation.init);selected=[]}catch{model.tools.error=error.localizedDescription}}}.disabled(loading||tag.isEmpty)}.fcCard()
             if loading{ProgressView("A consultar publicações…")}
             ScrollView{LazyVStack(spacing:12){ForEach(people){person in Button{if selected.contains(person.id){selected.remove(person.id)}else{selected.insert(person.id)}}label:{HStack{Image(systemName:selected.contains(person.id) ? "checkmark.circle.fill":"circle");Text("@\(person.username)");Spacer();Text(person.name).font(.caption).foregroundStyle(.secondary)}.fcCard()}.buttonStyle(.plain)}}}
-            Button("Rever follow de \(selected.count) perfis"){confirm=true}.buttonStyle(.borderedProminent).disabled(selected.isEmpty||model.tools.operationRunning)
+            Button("Rever follow de \(selected.count) perfis"){confirm=true}.buttonStyle(ProminentButtonStyle()).disabled(selected.isEmpty||model.tools.operationRunning)
             Button("Guardar como coleção"){Task{let value:[String:Any]=["id":UUID().uuidString,"title":"#\(tag)","usernames":people.filter{selected.contains($0.id)}.map(\.username),"content":"Perfis descobertos no radar de hashtags."];await model.tools.save("collections",[value]+model.tools.records("collections"))}}.disabled(selected.isEmpty||model.tools.busy)
         }.padding(20).onAppear{if tag.isEmpty{tag=initialTag}}
         .sheet(isPresented:$confirm){NativeActionReview(model:model,people:people.filter{selected.contains($0.id)},action:"follow")}
@@ -1016,11 +1235,11 @@ private struct ProfessionalToolView: View {
             HStack{Label(store.config["configured"] as? Bool == true ? "Integração ligada":"Ligar integração",systemImage:"link").font(.subheadline);Spacer();Button("Configurar"){configure=true}}
             if store.config["configured"] as? Bool != true {
                 ContentUnavailableView("Liga a tua conta profissional",systemImage:"link",description:Text("Estas ferramentas utilizam a integração Zernio já presente na versão original. Configura a ligação para aceder às operações reais."))
-                Button("Ligar integração"){configure=true}.buttonStyle(.borderedProminent)
+                Button("Ligar integração"){configure=true}.buttonStyle(ProminentButtonStyle())
             }else{
                 HStack{Button("Atualizar",systemImage:"arrow.clockwise"){Task{await load()}}.disabled(loading);Spacer();if ["posts","automations"].contains(mode){Button("Criar",systemImage:"plus"){creating=true}.disabled(account.isEmpty)}}
                 if loading{ProgressView("A carregar…").frame(maxWidth:.infinity)}
-                if let failure{Text(failure).foregroundStyle(.orange).fcCard()}
+                if let failure{Text(failure).foregroundStyle(Theme.caution).fcCard()}
                 if !metrics.isEmpty {ForEach(metrics.keys.sorted(),id:\.self){key in LabeledContent(key.replacingOccurrences(of:"_",with:" "),value:metrics[key] ?? "").fcCard()}}
                 ForEach(records){item in
                     VStack(alignment:.leading,spacing:12){
@@ -1092,7 +1311,7 @@ private struct IntegrationSettings: View {
             .toolbar{ToolbarItem(placement:.confirmationAction){Button("Fechar"){dismiss()}}}
             .task{if store.config["configured"] as? Bool == true{await connect()}}
             .confirmationDialog("Remover a chave guardada neste dispositivo?",isPresented:$disconnect,titleVisibility:.visible){Button("Desligar",role:.destructive){Task{do{store.config=(try await store.request("integration",["operation":"disconnect"]))["config"] as? [String:Any] ?? [:];dismiss()}catch{message=error.localizedDescription}}}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -1147,7 +1366,7 @@ private struct ProfessionalComposer: View {
                     Section("URLs públicas dos ficheiros — uma por linha"){TextEditor(text:$urls).frame(minHeight:110).textInputAutocapitalization(.never).autocorrectionDisabled()}
                     Section("Entrega"){Picker("Quando",selection:$delivery){Text("Rascunho").tag("draft");Text("Publicar agora").tag("now");Text("Agendar").tag("schedule")};if delivery == "schedule"{DatePicker("Data",selection:$date,in:Date()...)}}
                 }
-                if let message{Section{Text(message).foregroundStyle(.orange)}}
+                if let message{Section{Text(message).foregroundStyle(Theme.caution)}}
                 Section{Button(mode == "automations" ? "Rever automação":"Rever publicação"){confirm=true}.disabled(busy||title.isEmpty||account.isEmpty||(mode == "automations" ? keywords.isEmpty||content.isEmpty:urls.isEmpty && files.isEmpty));if busy{ProgressView()}}
             }.navigationTitle(mode == "automations" ? "Nova automação":"Publicar conteúdo")
             .toolbar{ToolbarItem(placement:.cancellationAction){Button("Fechar"){dismiss()}.disabled(busy)}}
@@ -1177,7 +1396,7 @@ private struct ProfessionalComposer: View {
                             }
                         }
                         dismiss()}catch{message=error.localizedDescription}}}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
         .interactiveDismissDisabled(busy)
         .fileImporter(isPresented:$importing,allowedContentTypes:[.image,.movie],allowsMultipleSelection:true) { result in
             do {
@@ -1243,14 +1462,14 @@ private struct ProfessionalConversation: View {
                         }
                     }
                 }
-                if let failure{Text(failure).font(.footnote).foregroundStyle(.orange)}
+                if let failure{Text(failure).font(.footnote).foregroundStyle(Theme.caution)}
                 if busy{ProgressView()}
                 if comments && !commentID.isEmpty{Text(privateReply ? "Resposta privada ao comentário selecionado":"Resposta pública ao comentário selecionado").font(.caption)}
                 HStack{TextField("Mensagem",text:$text,axis:.vertical).lineLimit(1...5);Button("Enviar"){confirming=true}.disabled(text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty||busy||(comments&&commentID.isEmpty))}.fcCard()
             }.padding(16).background(FCStyle.background).navigationTitle(item.title).navigationBarTitleDisplayMode(.inline)
             .toolbar{ToolbarItem(placement:.confirmationAction){Button("Fechar"){dismiss()}}}.task{await load()}
             .confirmationDialog("Enviar esta mensagem?",isPresented:$confirming,titleVisibility:.visible){Button("Enviar"){Task{busy=true;defer{busy=false};do{var body:[String:Any]=["accountId":account,"message":text];if comments{body["commentId"]=commentID};let destination=comments&&privateReply ? "\(path)/\(commentID)/private-reply":path;_ = try await store.professional(destination,method:"POST",body:body);text="";await load()}catch{failure=error.localizedDescription}}}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -1274,14 +1493,14 @@ struct RequestsStudio: View {
                 Picker("Pedidos",selection:$kind){Text("Enviados").tag("outgoing");Text("Recebidos").tag("incoming")}.pickerStyle(.segmented).disabled(busy).onChange(of:kind){_,_ in people=[];loaded=false;selected=[]}
                 Button("Consultar pedidos",systemImage:"arrow.clockwise"){Task{await load()}}.disabled(busy)
                 if busy{ProgressView("A consultar…")}
-                if let failure{Text(failure).foregroundStyle(.orange)}
+                if let failure{Text(failure).foregroundStyle(Theme.caution)}
                 if loaded && people.isEmpty{ContentUnavailableView("Nenhum pedido nesta consulta",systemImage:"person.crop.circle.badge.checkmark")}
                 ScrollView{LazyVStack(spacing:10){ForEach(people){person in HStack{if kind == "outgoing"{Button{if selected.contains(person.id){selected.remove(person.id)}else{selected.insert(person.id)}}label:{Image(systemName:selected.contains(person.id) ? "checkmark.circle.fill":"circle").font(.title2)}};VStack(alignment:.leading){Text("@\(person.username)").font(.headline);Text(person.name).font(.caption).foregroundStyle(.secondary)};Spacer()}.fcCard()}}}
-                if kind == "outgoing"{Button("Cancelar \(selected.count) pedidos"){confirm=true}.buttonStyle(.borderedProminent).disabled(selected.isEmpty||busy||model.tools.operationRunning)}
+                if kind == "outgoing"{Button("Cancelar \(selected.count) pedidos"){confirm=true}.buttonStyle(ProminentButtonStyle()).disabled(selected.isEmpty||busy||model.tools.operationRunning)}
             }.padding(20).background(FCStyle.background).navigationTitle("Pedidos")
             .toolbar{ToolbarItem(placement:.confirmationAction){Button("Fechar"){dismiss()}}}
             .confirmationDialog("Cancelar os pedidos selecionados?",isPresented:$confirm,titleVisibility:.visible){Button("Cancelar pedidos",role:.destructive){let chosen=people.filter{selected.contains($0.id)};selected=[];Task{await model.tools.execute("unfollow",people:chosen);failure=model.tools.error;loaded=false}}}
-        }.tint(FCStyle.accent)
+        }.tint(Theme.signalInk)
     }
 }
 
@@ -1337,15 +1556,15 @@ private struct CampaignStudio: View {
                 Text("As tuas rotinas e coleções").font(.title2.bold())
                 Text("Receitas com os critérios originais. Prepara os candidatos e revê cada perfil antes de agir.").foregroundStyle(.secondary)
                 if loading {ProgressView("A preparar receitas…")}
-                if let failure {Text(failure).foregroundStyle(.orange)}
+                if let failure {Text(failure).foregroundStyle(Theme.caution)}
                 ForEach(recipes) {recipe in
                     VStack(alignment:.leading,spacing:12) {
                         HStack {Text(recipe.title).font(.headline);Spacer();Text(people(recipe).count.formatted()).font(.title2.bold()).foregroundStyle(FCStyle.accent)}
                         Text(recipe.detail).font(.subheadline).foregroundStyle(.secondary)
                         Text((recipe.value["rules"] as? [String] ?? []).joined(separator:" · ")).font(.caption)
                         HStack {
-                            Button("Rever candidatos"){reviewing=recipe}.buttonStyle(.borderedProminent).disabled(people(recipe).isEmpty)
-                            Button("Guardar rotina"){name=recipe.title;keywords="";naming=recipe}.buttonStyle(.bordered)
+                            Button("Rever candidatos"){reviewing=recipe}.buttonStyle(ProminentButtonStyle()).disabled(people(recipe).isEmpty)
+                            Button("Guardar rotina"){name=recipe.title;keywords="";naming=recipe}.buttonStyle(QuietButtonStyle())
                         }
                     }.frame(maxWidth:.infinity,alignment:.leading).fcCard()
                 }

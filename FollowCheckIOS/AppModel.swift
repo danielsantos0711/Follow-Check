@@ -211,11 +211,15 @@ final class AppModel {
     var events: [DiagnosticEvent] = []
     var notice: String?
     var watchlistBusy = false
-    var lastCompletedCheck: Date? {
-        guard let raw = snapshot?.lastScanAt else { return nil }
+    private static let fractionalISO: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        return formatter
+    }()
+    private static let plainISO = ISO8601DateFormatter()
+    var lastCompletedCheck: Date? {
+        guard let raw = snapshot?.lastScanAt else { return nil }
+        return Self.fractionalISO.date(from: raw) ?? Self.plainISO.date(from: raw)
     }
     var canScanWatchlist: Bool { phase == .ready && sessionAvailable && !requiresAuthentication && !watchlistBlocked && (!isScanning || activeCheckScope == "account") }
     var canScan: Bool { phase == .ready && sessionAvailable && !requiresAuthentication && (!isScanning || activeCheckScope == "watchlist") && !paused && !safetyBlocked }
@@ -247,15 +251,7 @@ final class AppModel {
         if ProcessInfo.processInfo.arguments.contains("--preview-relations") { screen = .relations }
         if ProcessInfo.processInfo.arguments.contains("--preview-watchlist") { screen = .watchlist }
         if ProcessInfo.processInfo.arguments.contains("--preview-activity") { screen = .activity }
-        if isPreview {
-            accountId="preview";username="conta_preview";sessionAvailable=true;phase = .ready
-            statusText="Pronto para verificar";detailText="Pré-visualização local do design."
-            snapshot=Snapshot(["accountId":"preview","followers":397,"following":412,"mutuals":365,"nonFollowers":47,"newChanges":3,"lastScanAt":ISO8601DateFormatter().string(from:Date().addingTimeInterval(-3600))])
-            relationsReady=true
-            relations=(1...12).map {Relation(["id":"preview-\($0)","username":"perfil_\($0)","name":"Perfil de pré-visualização \($0)","following":true,"follows":$0%3 == 0])}
-            targets=[WatchTarget(["id":"preview-target","username":"perfil_preview","enabled":true,"baselineReady":true,"followers":520,"following":340,"lastSuccessAt":Date().addingTimeInterval(-1800).timeIntervalSince1970*1000])]
-            accountEvents=[WatchEvent(["id":"preview-change","type":"new_follower","title":"Novo seguidor","username":"perfil_novo","fullName":"Perfil de pré-visualização","detail":"Observado no último check completo.","timestamp":Date().addingTimeInterval(-3600).timeIntervalSince1970*1000])]
-        }
+        if isPreview { loadPreviewData(ProcessInfo.processInfo.arguments) }
         #endif
         if let data = UserDefaults.standard.data(forKey: eventsKey),
            let saved = try? JSONDecoder().decode([DiagnosticEvent].self, from: data) { events = Array(saved.suffix(1000)) }
@@ -319,6 +315,50 @@ final class AppModel {
         return header + events.map { event in
             "\(iso.string(from: event.date)) | \(event.level) | \(event.message)" + (event.details.map { "\n  " + $0 } ?? "")
         }.joined(separator: "\n")
+    }
+    #if DEBUG
+    /// Local design data for simulator screenshots. Never reaches release builds.
+    private func loadPreviewData(_ arguments: [String]) {
+        accountId = "preview"; username = "marta.lisboa"; sessionAvailable = true; phase = .ready
+        statusText = "Sessão disponível"; detailText = "Pronto para verificar o teu círculo."
+        let now = Date()
+        func ms(_ seconds: Double) -> Double { now.addingTimeInterval(-seconds).timeIntervalSince1970 * 1000 }
+        if arguments.contains("--preview-empty") {
+            username = ""; sessionAvailable = false; phase = .failed("Sessão por ligar"); return
+        }
+        snapshot = Snapshot(["accountId": "preview", "followers": 1172, "following": 344, "mutuals": 301, "nonFollowers": 43, "newChanges": 5, "lastScanAt": ISO8601DateFormatter().string(from: now.addingTimeInterval(-7200))])
+        if arguments.contains("--preview-checking") {
+            isScanning = true; activeCheckScope = "account"; progress = 0.42
+            statusText = "A recolher seguidores"; detailText = "492 de 1172 perfis · página 20"
+        }
+        let names = ["ana.ribeiro", "joao_m", "studio.norte", "ines.costa", "pedro.alves", "cafe.da.esquina", "rita.sousa", "miguel.ferreira", "lisboa.film", "sofia_mendes", "tiago.dias", "carolina.pt", "nuno.arq", "beatriz.lopes"]
+        let fullNames = ["Ana Ribeiro", "João Martins", "Studio Norte", "Inês Costa", "Pedro Alves", "Café da Esquina", "Rita Sousa", "Miguel Ferreira", "Lisboa Film Club", "Sofia Mendes", "Tiago Dias", "Carolina", "Nuno · Arquitetura", "Beatriz Lopes"]
+        relationsReady = true
+        relations = names.indices.map { index in
+            Relation(["id": "preview-\(index)", "username": names[index], "name": fullNames[index], "following": index % 4 != 3, "follows": index % 3 != 1])
+        }
+        targets = [
+            WatchTarget(["id": "preview-target", "username": "studio.norte", "enabled": true, "baselineReady": true, "coverageVerified": true, "followers": 5204, "following": 341, "intervalMinutes": 1440, "lastSuccessAt": ms(1800)]),
+            WatchTarget(["id": "preview-target-2", "username": "lisboa.film", "enabled": true, "baselineReady": false, "followers": 0, "following": 0, "intervalMinutes": 360]),
+        ]
+        watchEvents = [
+            WatchEvent(["id": "w1", "targetId": "preview-target", "type": "watch_new_follower", "title": "Novo seguidor", "username": "rita.sousa", "fullName": "Rita Sousa", "coverageVerified": true, "timestamp": ms(1800)]),
+            WatchEvent(["id": "w2", "targetId": "preview-target", "type": "watch_stopped_following", "title": "Deixou de seguir", "username": "cafe.da.esquina", "fullName": "Café da Esquina", "coverageVerified": true, "timestamp": ms(1800)]),
+        ]
+        accountEvents = [
+            WatchEvent(["id": "a1", "type": "new_follower", "title": "Novo seguidor", "username": "ines.costa", "fullName": "Inês Costa", "detail": "Observado no último check completo.", "timestamp": ms(7200)]),
+            WatchEvent(["id": "a2", "type": "unfollow_confirmed", "title": "Deixou de te seguir", "username": "pedro.alves", "fullName": "Pedro Alves", "detail": "Ausente em dois checks consecutivos.", "timestamp": ms(7300)]),
+            WatchEvent(["id": "a3", "type": "new_follower", "title": "Novo seguidor", "username": "tiago.dias", "fullName": "Tiago Dias", "detail": "Observado no último check completo.", "timestamp": ms(7400)]),
+            WatchEvent(["id": "a4", "type": "account_unavailable", "title": "Conta indisponível", "username": "lisboa.film", "fullName": "Lisboa Film Club", "detail": "O perfil deixou de estar acessível.", "timestamp": ms(90000)]),
+            WatchEvent(["id": "a5", "type": "unfollow_confirmed", "title": "Deixou de te seguir", "username": "nuno.arq", "fullName": "Nuno · Arquitetura", "detail": "Ausente em dois checks consecutivos.", "timestamp": ms(95000)]),
+        ]
+    }
+    #endif
+    /// Pull-to-refresh: re-read the engine state and the saved relations.
+    func refreshState() {
+        guard !isPreview else { return }
+        webCoordinator?.control("state")
+        loadRelations()
     }
     func clearLogs() { events.removeAll(); persistEvents(); webCoordinator?.control("clearLogs") }
     func attach(_ coordinator: FollowCheckWebCoordinator) { webCoordinator = coordinator }
