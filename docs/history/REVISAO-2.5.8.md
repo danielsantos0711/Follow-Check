@@ -1,0 +1,9 @@
+# 2.5.8 — listas carregadas pelo cliente do Instagram
+
+Relatório real 2.5.7: a validação renderizada confirmou 1172 seguidores e 343 seguidos antes e depois. O canal REST independente recebeu 1171 entradas de seguidores em 47 páginas, mas o conjunto normalizado ficou com 924 IDs únicos; a diferença de 247 inclui sobreposição e/ou entradas sem ID, não quantificadas separadamente nessa versão. A lista de seguidos devolveu 342 entradas e 342 IDs em 14 páginas. A paginação terminou explicitamente, sem 429.
+
+A Watchlist passa a abrir as listas de seguidores/seguidos na mesma navegação WebKit usada para o perfil. O leitor observa as respostas que a página solicita e desloca o diálogo quando necessário; não constrói pedidos privados de continuação. Reconhece páginas REST com alvo/direção exatos e conexões GraphQL atribuídas ao alvo. Une apenas IDs válidos, valida o total e regista páginas, entradas brutas, IDs únicos, duplicados e inválidos. Esperas e pausas configuradas aplicam-se à deslocação. Falhas preservam a referência anterior; não há combinação de tentativas de diferentes transportes para fingir cobertura.
+
+A conta do observador só pode ser adicionada quando um objeto fresco do perfil confirma explicitamente a relação correspondente (followed_by_viewer/friendship_status.following para seguidores; follows_viewer/friendship_status.followed_by para seguidos), com ID da sessão e username conhecidos. Uma diferença de um perfil não autoriza inferir essa relação. Mudanças contraditórias dessa prova interrompem a leitura.
+
+O teste nativo controlado verifica abertura de diálogo, deslocação, segunda página e a conta do observador com prova explícita. Os testes do motor cobrem sobreposição, falta de perfis, direção/alvo incorretos e atribuição de conexões. A cobertura efetiva no Instagram continua a depender do que o serviço disponibiliza à sessão; a proteção contra alterações fictícias mantém-se.

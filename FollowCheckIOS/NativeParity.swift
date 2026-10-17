@@ -1,0 +1,413 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct NativeQueueView:View {
+    let model:AppModel
+    @State private var review=false
+    private var store:NativeToolsStore {model.tools}
+    private var draft:[String:Any] {store.workspace["operation-draft"] as? [String:Any] ?? [:]}
+    private var rows:[[String:Any]] {store.queueRows.isEmpty ? draft["rows"] as? [[String:Any]] ?? []:store.queueRows}
+    private var action:String {store.queueAction.isEmpty ? draft["action"] as? String ?? "unfollow":store.queueAction}
+    private var pending:[AppModel.Relation] {rows.filter{$0["status"] as? String=="pending"}.map(AppModel.Relation.init)}
+    var body:some View {
+        ScrollView {LazyVStack(alignment:.leading,spacing:16){
+            Text("Centro de operações").font(.largeTitle.bold())
+            Text("Cada perfil tem um estado. Ações sem confirmação não são repetidas automaticamente.").foregroundStyle(.secondary)
+            if store.operationRunning {
+                ProgressView(value:Double(store.operationDone),total:Double(max(store.operationTotal,1)))
+                Text("\(store.operationDone) / \(store.operationTotal) · @\(store.operationCurrent)").font(.headline)
+                if let until=store.queueWaitUntil {
+                    HStack{Text("Próxima ação");Spacer();Text(until,style:.relative).monospacedDigit()}
+                }
+                Button("Parar após a operação atual",role:.destructive){store.operationPaused=true}
+            }else if !pending.isEmpty {
+                Button("Rever \(pending.count) perfis ainda não iniciados"){review=true}.buttonStyle(.borderedProminent)
+            }
+            ForEach(rows.compactMap{row -> QueueRecord? in guard let id=row["id"] as? String else{return nil};return QueueRecord(id:id,value:row)}){item in
+                let status=item.value["status"] as? String ?? "pending"
+                HStack {
+                    ProfileAvatar(photoURL:item.value["photoURL"] as? String ?? "",size:40)
+                    VStack(alignment:.leading,spacing:5){Text("@"+(item.value["username"] as? String ?? ""));Text(Self.labels[status] ?? status).font(.caption).foregroundStyle(status=="confirmed" ? FCStyle.mint:status=="unconfirmed" ? .orange:.secondary);if let message=item.value["message"] as? String{Text(message).font(.caption2).foregroundStyle(.secondary)}}
+                    Spacer()
+                    Image(systemName:status=="confirmed" ? "checkmark.circle.fill":status=="unconfirmed" ? "exclamationmark.triangle":"clock")
+                }.fcCard()
+            }
+            if rows.isEmpty {ContentUnavailableView("Ainda sem operações",systemImage:"list.bullet.rectangle",description:Text("Prepara uma seleção nas Relações, Cleanup ou Coleções."))}
+        }.padding(20)}.background(FCStyle.background).task{await store.load()}
+            .sheet(isPresented:$review){NativeActionReview(model:model,people:pending,action:action)}
+    }
+    private struct QueueRecord:Identifiable {let id:String;let value:[String:Any]}
+    private static let labels=["pending":"Ainda não iniciada","running":"Em curso / por confirmar","confirmed":"Confirmada","unconfirmed":"Sem confirmação — revisão necessária"]
+}
+
+struct RelationshipEvidence: Identifiable {
+    let raw: [String:Any]
+    var user:[String:Any] { raw["user"] as? [String:Any] ?? [:] }
+    var features:[String:Any] { raw["features"] as? [String:Any] ?? [:] }
+    var profile:[String:Any] { raw["profile"] as? [String:Any] ?? [:] }
+    var proof:[String:Any] { features["proofGraph"] as? [String:Any] ?? [:] }
+    var id:String { user["id"] as? String ?? "" }
+    var protected:Bool { raw["isProtected"] as? Bool ?? false }
+    var score:Int { (features["relationshipScore"] as? NSNumber)?.intValue ?? 0 }
+    var confidence:Int { (proof["calibratedConfidence"] as? NSNumber ?? features["hybridConfidence"] as? NSNumber)?.intValue ?? 0 }
+    var circle:String { features["relationshipCircle"] as? String ?? "unknown" }
+    var person:AppModel.Relation { AppModel.Relation(["id":id,"username":user["username"] ?? "","name":user["full_name"] ?? "","photoURL":user["profile_pic_url"] ?? "","follows":user["follows_viewer"] ?? false,"following":user["followed_by_viewer"] ?? false]) }
+}
+
+struct RelationshipIntelligence: View {
+    let model:AppModel
+    @State private var rows:[RelationshipEvidence]=[]
+    @State private var plan:[String:Any]=[:]
+    @State private var source:[String:Any]=[:]
+    @State private var target=300
+    @State private var query=""
+    @State private var filter="Todos"
+    @State private var relation="Todos"
+    @State private var confidence="Todas"
+    @State private var selected=Set<String>()
+    @State private var detail:RelationshipEvidence?
+    @State private var importing=false
+    @State private var memories=false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var loading=false
+    @State private var loadingAccount=""
+    @State private var loadingOperation=""
+    @State private var refreshPending=false
+    @State private var loadToken=UUID()
+    @State private var failure:String?
+    @State private var review=false
+    @State private var action="unfollow"
+    @State private var undo:[[String:Any]]=[]
+    private var store:NativeToolsStore {model.tools}
+    private let filters=["Todos","Objetivo","Unilaterais","Adormecidos 1 ano","Adormecidos 2 anos","Adormecidos 3 anos","Suspeitos","Transformados","Mútuos silenciosos","Contradições","Verificação antiga"]
+    private var candidateIDs:Set<String> {Set(plan["candidates"] as? [String] ?? [])}
+    private var visible:[RelationshipEvidence] {
+        rows.filter { row in
+            let p=row.person,f=row.features
+            let tags=(store.metadata[p.id]?["tags"] as? [String] ?? []).joined(separator:" ")
+            guard query.isEmpty || "\(p.username) \(p.name) \(tags)".localizedCaseInsensitiveContains(query),p.matches(relation) else{return false}
+            if confidence=="Alta" && row.confidence<80{return false}
+            if confidence=="Média" && !(55..<80).contains(row.confidence){return false}
+            if confidence=="Baixa" && row.confidence>=55{return false}
+            switch filter {
+            case "Objetivo":return candidateIDs.contains(row.id)
+            case "Unilaterais":return ["outbound","inbound"].contains(f["energy"] as? String ?? "")
+            case "Adormecidos 1 ano":return (f["dormantYears"] as? Double ?? 0)>=1
+            case "Adormecidos 2 anos":return (f["dormantYears"] as? Double ?? 0)>=2
+            case "Adormecidos 3 anos":return (f["dormantYears"] as? Double ?? 0)>=3
+            case "Suspeitos":return f["suspicious"] as? Bool == true || f["inactive"] as? Bool == true
+            case "Transformados":return f["transformed"] as? Bool == true
+            case "Mútuos silenciosos":return f["silentMutual"] as? Bool == true
+            case "Contradições":return !(row.proof["contradictions"] as? [Any] ?? []).isEmpty
+            case "Verificação antiga":return f["verificationStale"] as? Bool == true
+            default:return true
+            }
+        }.sorted{$0.score == $1.score ? $0.person.username<$1.person.username:$0.score<$1.score}
+    }
+    private var chosen:[AppModel.Relation] {rows.filter{selected.contains($0.id) && !$0.protected}.map(\.person)}
+    private func refresh(_ operation:String="derive",files:[[String:Any]] = [],urls:[URL] = []) async {
+        #if DEBUG
+        if model.isPreview {
+            rows=model.relations.map{person in RelationshipEvidence(raw:["user":["id":person.id,"username":person.username,"full_name":person.name,"followed_by_viewer":person.following,"follows_viewer":person.follows],"features":["relationshipScore":42,"hybridConfidence":65,"relationshipCircle":"occasional"],"profile":["evidenceSummary":"Pré-visualização local"]])}
+            return
+        }
+        #endif
+        guard !loading || loadingAccount != model.accountId else{if operation=="derive"{refreshPending=true};return};loading=true;failure=nil
+        let account=model.accountId
+        let token=UUID();loadToken=token;loadingAccount=account
+        model.legacyProgress="";loadingOperation=operation
+        defer{if loadToken==token{
+            loading=false
+            if refreshPending {refreshPending=false;Task{await refresh()}}
+        }}
+        do {
+            let r:[String:Any]
+            if operation=="import",!urls.isEmpty {
+                guard let coordinator=model.webCoordinator else {throw NSError(domain:"FollowCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"A sessão ainda está a iniciar."])}
+                r=try await coordinator.importArchive(urls,target:target)
+            } else {r=try await store.request("legacy",["operation":operation,"target":target,"files":files,"username":model.username,"ids":Array(selected)])}
+            guard loadToken==token,account==model.accountId,r["accountId"] as? String==account else{return}
+            rows=(r["rows"] as? [[String:Any]] ?? []).map{RelationshipEvidence(raw:$0)}
+            plan=r["plan"] as? [String:Any] ?? [:];source=r["source"] as? [String:Any] ?? [:]
+            selected.formIntersection(Set(rows.filter{!$0.protected}.map(\.id)))
+            await store.load()
+            if operation != "derive" {await model.saveScanBackup()}
+        }catch{if account==model.accountId {failure=error.localizedDescription}}
+    }
+    private func decide(_ value:String) {
+        let previous=store.workspace["relationship-decisions"] as? [String:Any] ?? [:]
+        undo.append(previous)
+        var next=previous
+        for row in rows where selected.contains(row.id) && !row.protected {next[row.id]=value}
+        Task{await store.save("relationship-decisions",next)}
+    }
+    var body:some View {
+        ScrollView {
+            LazyVStack(alignment:.leading,spacing:18) {
+                Text("O teu círculo real").font(.largeTitle.bold())
+                Text("Histórico, relação atual e evidência por pessoa. Tu decides o resultado.").foregroundStyle(.secondary)
+                sources
+                HStack {
+                    metric("Analisados",rows.count);metric("Protegidos",rows.filter(\.protected).count)
+                    metric("Candidatos",candidateIDs.count)
+                }
+                VStack(alignment:.leading,spacing:14) {
+                    Text("1 · Construir plano").font(.headline)
+                    Stepper("Objetivo: \(target) mútuos",value:$target,in:0...10000,step:10)
+                    Button("Construir plano de revisão",systemImage:"slider.horizontal.3") {Task{var preferences=store.workspace["relationship-preferences"] as? [String:Any] ?? [:];preferences["target"]=target;await store.save("relationship-preferences",preferences);await refresh();filter="Objetivo";selected=candidateIDs}}
+                        .buttonStyle(.borderedProminent).disabled(loading || rows.isEmpty)
+                    Text("Conversas, proteções, contradições e dados insuficientes ficam fora das sugestões automáticas.").font(.caption).foregroundStyle(.secondary)
+                }.fcCard()
+                HStack {Image(systemName:"magnifyingglass");TextField("Nome, username ou etiqueta",text:$query).textInputAutocapitalization(.never)}.fcCard()
+                HStack {
+                    Picker("Sinais",selection:$filter){ForEach(filters,id:\.self){Text($0)}}
+                    Picker("Relação",selection:$relation){ForEach(["Todos","Mútuos","Não me seguem","Eu não sigo"],id:\.self){Text($0)}}
+                    Picker("Confiança",selection:$confidence){ForEach(["Todas","Alta","Média","Baixa"],id:\.self){Text($0)}}
+                }.font(.caption)
+                HStack {
+                    Text("\(visible.count) perfis · \(selected.count) selecionados").font(.caption)
+                    Spacer()
+                    Button("Selecionar resultados"){selected=Set(visible.filter{!$0.protected}.map(\.id))}.font(.caption)
+                }
+                if loading {HStack{ProgressView(model.legacyProgress.isEmpty ? "A cruzar evidências…":model.legacyProgress);Spacer();Button("Cancelar"){model.webCoordinator?.cancelArchiveImport();if loadingOperation != "import" {model.cancelCurrentScan()}}}}
+                if let failure {Text(failure).foregroundStyle(.orange).fcCard()}
+                ForEach(visible) {row in
+                    HStack(spacing:12) {
+                        Button {if selected.contains(row.id){selected.remove(row.id)}else{selected.insert(row.id)}} label:{Image(systemName:row.protected ? "shield.fill":selected.contains(row.id) ? "checkmark.circle.fill":"circle").font(.title2)}.disabled(row.protected)
+                        ProfileAvatar(photoURL:row.person.photoURL,size:42)
+                        Button {detail=row} label:{
+                            VStack(alignment:.leading,spacing:5) {
+                                Text("@"+row.person.username).font(.subheadline.bold())
+                                Text(row.person.name).font(.caption).foregroundStyle(.secondary)
+                                Text(Self.circles[row.circle] ?? row.circle).font(.caption2).foregroundStyle(FCStyle.mint)
+                                Text("Ligação \(row.score)% · confiança \(row.confidence)%").font(.caption2).foregroundStyle(.secondary)
+                                if (store.workspace["profile-meta"] as? [String:[String:Any]])?[row.id]?["mutedPosts"] as? Bool == true {Label("Silenciado",systemImage:"speaker.slash").font(.caption2).foregroundStyle(.secondary)}
+                                if let decision=(store.workspace["relationship-decisions"] as? [String:String])?[row.id] {Text(decision=="keep" ? "Manter":decision=="review" ? "Rever depois":decision).font(.caption2).foregroundStyle(FCStyle.accent)}
+                            }.frame(maxWidth:.infinity,alignment:.leading)
+                        }.buttonStyle(.plain)
+                        Image(systemName:"chevron.right").font(.caption).foregroundStyle(.secondary)
+                    }.fcCard()
+                }
+                if rows.isEmpty && !loading {ContentUnavailableView("Começa pela audiência",systemImage:"person.2",description:Text("Faz um check e importa o histórico Instagram para recuperar a análise de ligações."))}
+            }.padding(20)
+        }.background(FCStyle.background)
+        .animation(reduceMotion ? nil:.easeInOut(duration:0.2),value:selected.count)
+        .safeAreaInset(edge:.bottom){decisionsBar}
+        .task{await store.load();target=(store.workspace["relationship-preferences"] as? [String:Any])?["target"] as? Int ?? 300;await refresh()
+            #if DEBUG
+            if model.isPreview,ProcessInfo.processInfo.arguments.contains("--preview-memories"){memories=true}
+            #endif
+        }
+        .onChange(of:model.accountId){_,_ in rows=[];selected=[];undo=[];Task{await refresh()}}
+        .onChange(of:store.operationDone){_,_ in Task{await refresh()}}
+        .onChange(of:store.operationRunning){_,running in if !running {Task{await refresh()}}}
+        .sheet(item:$detail){EvidenceDetail(model:model,row:$0)}
+        .sheet(isPresented:$memories){PrivateMemoryGallery(model:model)}
+        .onDisappear{model.webCoordinator?.cancelArchiveImport()}
+        .sheet(isPresented:$review){NativeActionReview(model:model,people:chosen,action:action)}
+        .fileImporter(isPresented:$importing,allowedContentTypes:[.zip,.json],allowsMultipleSelection:true){result in
+            Task {
+                do {
+                    let urls=try result.get()
+                    await refresh("import",urls:urls)
+                }catch{failure=error.localizedDescription}
+            }
+        }
+    }
+    private func metric(_ title:String,_ count:Int)->some View {VStack(alignment:.leading){Text(count.formatted()).font(.title2.bold());Text(title).font(.caption2).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,alignment:.leading).fcCard()}
+    private var sources:some View {
+        VStack(alignment:.leading,spacing:12) {
+            Label("Fontes da análise",systemImage:"square.stack.3d.up").font(.headline)
+            Button("Importar histórico Instagram · ZIP / JSON",systemImage:"square.and.arrow.down"){importing=true}
+            Text("ZIP até 1 GB · leitura por blocos no iPhone").font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Button("Memórias privadas",systemImage:"lock.rectangle.stack"){memories=true}
+                Spacer()
+                Button("Sincronizar conta profissional"){Task{await refresh("professional")}}
+                    .disabled(store.config["configured"] as? Bool != true)
+            }.font(.caption)
+            HStack {
+                Button("Conversas recentes"){Task{await refresh("conversations")}}
+                Spacer();Button("Gostos e comentários"){Task{await refresh("engagement")}}
+            }.font(.caption)
+            if let count=source["matchedProfiles"] as? Int {Text("Histórico associado a \(count) perfis").font(.caption).foregroundStyle(FCStyle.mint)}
+            Text("O histórico é analisado localmente. A ausência de sinais não prova ausência de relação.").font(.caption2).foregroundStyle(.secondary)
+        }.fcCard().disabled(loading)
+    }
+    private var decisionsBar:some View {
+        VStack(spacing:10) {
+            HStack {
+                Text("2 · Escolher ação").font(.caption.bold());Spacer()
+                Button("Desfazer"){if let previous=undo.popLast(){Task{await store.save("relationship-decisions",previous)}}}.disabled(undo.isEmpty)
+                Button("Limpar"){selected=[]}
+            }
+            HStack {
+                Button("Manter"){decide("keep");selected=[]}
+                Button("Rever depois"){decide("review");selected=[]}
+                Spacer()
+                Menu("Preparar ação") {
+                    Button("Verificar perfis selecionados"){Task{await refresh("verify")}}
+                    Button("Silenciar publicações e Stories"){action="mute";review=true}
+                    Button("Só deixar de seguir"){action="unfollow";review=true}
+                    Button("Só remover seguidor"){action="removeFollower";review=true}
+                    Button("Desligar nos dois sentidos"){action="disconnect";review=true}
+                }.buttonStyle(.borderedProminent)
+            }.disabled(chosen.isEmpty || store.operationRunning)
+        }.font(.caption).padding(16).background(.ultraThinMaterial)
+    }
+    static let circles=["close":"Círculo próximo","active":"Ligação ativa","occasional":"Contacto ocasional","weak":"Ligação fraca","dormant":"Ligação adormecida","none":"Sem contacto","unknown":"Dados insuficientes"]
+}
+
+private struct EvidenceDetail:View {
+    let model:AppModel
+    @State private var memories=false
+    let row:RelationshipEvidence
+    @Environment(\.dismiss) private var dismiss
+    var body:some View {
+        NavigationStack {
+            ScrollView {VStack(alignment:.leading,spacing:18){
+                Button("Ver excertos privados",systemImage:"lock.rectangle.stack"){memories=true}
+                    .sheet(isPresented:$memories){PrivateMemoryGallery(model:model,profileID:row.id)}
+                HStack{ProfileAvatar(photoURL:row.person.photoURL,size:64);VStack(alignment:.leading){Text("@"+row.person.username).font(.title2.bold());Text(row.person.name).foregroundStyle(.secondary)}}
+                LabeledContent("Força da ligação",value:"\(row.score)%")
+                LabeledContent("Confiança",value:"\(row.confidence)%")
+                Text(row.profile["evidenceSummary"] as? String ?? "Sem histórico associado").foregroundStyle(.secondary)
+                ForEach(["reason","protectionReason","autoCleanupReason"],id:\.self){key in
+                    if let values=row.profile[key] as? [String]{ForEach(values,id:\.self){Text($0).font(.subheadline)}}
+                    if let value=row.features[key] as? String,!value.isEmpty{Text(value).font(.subheadline).foregroundStyle(.orange)}
+                }
+                if let signals=row.profile["signals"] as? [String:Any] {
+                    Text("Sinais do histórico").font(.headline)
+                    ForEach(signals.keys.sorted(),id:\.self){key in if let number=signals[key] as? NSNumber {LabeledContent(Self.labels[key] ?? key,value:number.stringValue).font(.subheadline)}}
+                }
+                Text("Livro de prova").font(.headline)
+                ForEach((row.proof["ledger"] as? [[String:Any]] ?? []).indices,id:\.self){index in
+                    let evidence=(row.proof["ledger"] as? [[String:Any]] ?? [])[index]
+                    VStack(alignment:.leading,spacing:6){
+                        Text(evidence["label"] as? String ?? "Evidência").font(.subheadline.bold())
+                        Text(evidence["providerLabel"] as? String ?? "").font(.caption).foregroundStyle(.secondary)
+                        if let quality=evidence["quality"] as? NSNumber {Text("Qualidade da fonte: \(quality.intValue)%").font(.caption)}
+                    }.frame(maxWidth:.infinity,alignment:.leading).fcCard()
+                }
+                ForEach(row.proof["abstentionReasons"] as? [String] ?? [],id:\.self){Text($0).font(.subheadline).foregroundStyle(.orange)}
+                if let next=row.proof["nextBestAction"] as? [String:Any] {
+                    VStack(alignment:.leading,spacing:6){Text(next["label"] as? String ?? "Próximo passo").font(.headline);Text(next["reason"] as? String ?? "").font(.subheadline).foregroundStyle(.secondary)}.fcCard()
+                }
+                DisclosureGroup("Detalhes da análise"){Text(Self.formatted(row.proof)).font(.caption.monospaced()).textSelection(.enabled)}
+            }.padding(20)}.navigationTitle("Evidência por perfil").navigationBarTitleDisplayMode(.inline)
+                .toolbar{ToolbarItem(placement:.confirmationAction){Button("Concluído"){dismiss()}}}
+        }.tint(FCStyle.accent)
+    }
+    private static let labels=["dmSent":"Mensagens enviadas","dmReceived":"Mensagens recebidas","dmDays":"Dias com mensagens","likesGiven":"Gostos teus","commentsGiven":"Comentários teus","mentions":"Menções","storyReactions":"Reações a Stories","total":"Total de sinais"]
+    private static func formatted(_ value:[String:Any])->String {guard let data=try? JSONSerialization.data(withJSONObject:value,options:[.prettyPrinted,.sortedKeys])else{return "Sem evidência adicional"};return String(decoding:data,as:UTF8.self)}
+}
+
+struct NativeActionReview:View {
+    let model:AppModel
+    let people:[AppModel.Relation]
+    let action:String
+    @Environment(\.dismiss) private var dismiss
+    @State private var excluded=Set<String>()
+    private var eligible:[AppModel.Relation] {people.filter{!excluded.contains($0.id) && !model.tools.protectedIDs.contains($0.id) && $0.canPerform(action)}}
+    private var title:String {action=="mute" ? "Silenciar publicações e Stories":action=="follow" ? "Seguir perfis":action=="removeFollower" ? "Remover seguidores":action=="disconnect" ? "Desligar nos dois sentidos":"Deixar de seguir"}
+    private var pacingEstimate:String {
+        let defaults=UserDefaults.standard
+        func setting(_ name:String,_ fallback:Int)->Int {(defaults.object(forKey:"followcheck.limits."+name) as? NSNumber)?.intValue ?? fallback}
+        let count=eligible.count*(action=="disconnect" ? 2:1),gaps=max(0,count-1)
+        let every=max(0,min(50,setting("actionEvery",5)))
+        let seconds=gaps*max(2,min(120,setting("actionDelay",4)))+(every>0 ? gaps/every:0)*max(0,min(600,setting("actionPause",300)))
+        return seconds<60 ? "\(seconds) s":"\(seconds/60) min \(seconds%60) s"
+    }
+    var body:some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(title).font(.title2.bold())
+                    LabeledContent("Perfis neste lote",value:eligible.count.formatted())
+                    LabeledContent("Excluídos / incompatíveis",value:(people.count-eligible.count).formatted())
+                    LabeledContent("Pausas previstas",value:pacingEstimate)
+                    Text("Acresce o tempo das respostas e confirmações do Instagram.").font(.caption).foregroundStyle(.secondary)
+                    Text("Cada resultado é confirmado individualmente. Podes retirar perfis antes de iniciar.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("3 · Revisão final") {
+                    ForEach(people){person in
+                        HStack {
+                            ProfileAvatar(photoURL:person.photoURL,size:36)
+                            VStack(alignment:.leading){Text("@"+person.username);Text(person.name).font(.caption).foregroundStyle(.secondary)}
+                            Spacer()
+                            Toggle("Incluir "+person.username,isOn:Binding(get:{!excluded.contains(person.id) && !model.tools.protectedIDs.contains(person.id) && person.canPerform(action)},set:{if $0{excluded.remove(person.id)}else{excluded.insert(person.id)}})).labelsHidden()
+                                .disabled(model.tools.protectedIDs.contains(person.id) || !person.canPerform(action))
+                        }
+                    }
+                }
+            }.navigationTitle("Rever operação").navigationBarTitleDisplayMode(.inline)
+                .toolbar{ToolbarItem(placement:.cancellationAction){Button("Voltar"){dismiss()}}}
+                .safeAreaInset(edge:.bottom){Button("Confirmar \(eligible.count) perfis"){let confirmed=eligible;dismiss();Task{await model.tools.execute(action,people:confirmed)}}.buttonStyle(.borderedProminent).disabled(eligible.isEmpty || model.tools.operationRunning).padding().frame(maxWidth:.infinity).background(.ultraThinMaterial)}
+        }.tint(FCStyle.accent)
+    }
+}
+
+
+private struct PrivateMemoryGallery:View {
+    let model:AppModel
+    var profileID:String?=nil
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var entries:[String:[[String:Any]]]=[:]
+    @State private var query=""
+    @State private var loading=false
+    @State private var failure:String?
+    @State private var deleting=false
+    private var ids:[String] {entries.keys.filter{id in
+        (profileID==nil || profileID==id) && (query.isEmpty || name(id).localizedCaseInsensitiveContains(query))
+    }.sorted{ name($0)<name($1) }}
+    private func name(_ id:String)->String {model.relations.first{$0.id==id}.map{"@"+$0.username} ?? id}
+    private func load(_ operation:String="get") async {
+        #if DEBUG
+        if model.isPreview {
+            entries=["preview-1":[["text":"Temos de combinar qualquer coisa esta semana.","direction":"incoming","timestamp":"15/10/2026"],["text":"Adorei rever estas fotografias!","direction":"outgoing","timestamp":"14/10/2026"]]]
+            return
+        }
+        #endif
+        let owner=model.accountId;loading=true;failure=nil
+        defer{loading=false}
+        do {
+            let result=try await model.tools.request("memories",["operation":operation])
+            guard owner==model.accountId,scenePhase == .active else{return}
+            entries=result["memories"] as? [String:[[String:Any]]] ?? [:]
+        }catch{if owner==model.accountId{failure=error.localizedDescription}}
+    }
+    var body:some View {
+        NavigationStack {
+            ScrollView {LazyVStack(alignment:.leading,spacing:18){
+                Label("Só neste dispositivo",systemImage:"lock.shield").font(.caption.bold()).foregroundStyle(FCStyle.mint)
+                Text("Excertos do histórico que importaste. Não são incluídos nas cópias exportadas.").font(.caption).foregroundStyle(.secondary)
+                if loading {ProgressView("A abrir memórias…")}
+                if let failure {Text(failure).foregroundStyle(.orange)}
+                if ids.isEmpty && !loading {ContentUnavailableView("Sem excertos",systemImage:"text.bubble",description:Text("Importa o histórico com mensagens para ver as memórias por pessoa."))}
+                ForEach(ids,id:\.self){id in
+                    VStack(alignment:.leading,spacing:14){
+                        HStack{ProfileAvatar(photoURL:model.relations.first{$0.id==id}?.photoURL ?? "",size:36);Text(name(id)).font(.headline)}
+                        ForEach(Array((entries[id] ?? []).enumerated()),id:\.offset){_,entry in
+                            VStack(alignment:.leading,spacing:6){
+                                Text(entry["text"] as? String ?? "").font(.body).textSelection(.enabled)
+                                HStack{Text(entry["direction"] as? String == "outgoing" ? "Enviado por ti":"Recebido");Spacer();Text(entry["timestamp"] as? String ?? "").lineLimit(1)}.font(.caption2).foregroundStyle(.secondary)
+                            }.padding(12).background(FCStyle.accent.opacity(0.08),in:RoundedRectangle(cornerRadius:14))
+                        }
+                    }.fcCard()
+                }
+            }.padding(20)}
+            .background(FCStyle.background).navigationTitle("Memórias privadas")
+            .searchable(text:$query,prompt:"Procurar pessoa")
+            .toolbar {
+                ToolbarItem(placement:.cancellationAction){Button("Fechar"){dismiss()}}
+                ToolbarItem(placement:.primaryAction){Button("Apagar",role:.destructive){deleting=true}.disabled(entries.isEmpty || loading)}
+            }
+            .confirmationDialog("Apagar todos os excertos privados desta conta?",isPresented:$deleting,titleVisibility:.visible){Button("Apagar excertos",role:.destructive){Task{await load("clear")}}}
+            .task{await load()}
+            .onChange(of:model.accountId){_,_ in entries=[:];Task{await load()}}
+            .onChange(of:scenePhase){_,phase in if phase != .active {entries=[:]}else{Task{await load()}}}
+            .privacySensitive()
+        }.tint(FCStyle.accent)
+    }
+}
