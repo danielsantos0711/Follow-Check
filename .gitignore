@@ -3,3 +3,4 @@ build/
 screens/
 .DS_Store
 xcuserdata/
+dist/
