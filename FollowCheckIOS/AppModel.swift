@@ -341,7 +341,7 @@ final class AppModel {
         let now = Date()
         func ms(_ seconds: Double) -> Double { now.addingTimeInterval(-seconds).timeIntervalSince1970 * 1000 }
         if arguments.contains("--preview-empty") {
-            username = ""; sessionAvailable = false; phase = .failed("Sessão por ligar"); return
+            accountId = ""; username = ""; sessionAvailable = false; phase = .failed("Sessão por ligar"); return
         }
         snapshot = Snapshot(["accountId": "preview", "followers": 1172, "following": 344, "mutuals": 301, "nonFollowers": 43, "newChanges": 5, "lastScanAt": ISO8601DateFormatter().string(from: now.addingTimeInterval(-7200))])
         if arguments.contains("--preview-checking") {

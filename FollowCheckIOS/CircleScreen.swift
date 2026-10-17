@@ -70,6 +70,9 @@ struct CircleScreen: View {
                         .font(.subheadline).foregroundStyle(Theme.ink2).fixedSize(horizontal: false, vertical: true)
                 }
                 sources
+                if let count = source["matchedProfiles"] as? Int {
+                    Label("Histórico associado a \(count) perfis", systemImage: "checkmark.seal.fill").font(.footnote.weight(.semibold)).foregroundStyle(Theme.signalInk)
+                }
                 if loading {
                     HStack(spacing: 10) {
                         ProgressView()
@@ -163,11 +166,7 @@ struct CircleScreen: View {
         }
         .surface(padding: 0, radius: 20)
         .disabled(loading || !model.sessionAvailable)
-        .overlay(alignment: .bottomTrailing) {
-            if let count = source["matchedProfiles"] as? Int {
-                Text("Histórico de \(count) perfis").font(.caption2.weight(.semibold)).foregroundStyle(Theme.signalInk).padding(10)
-            }
-        }
+
     }
 
     private func sourceRow(_ icon: String, _ title: String, _ detail: String, action: @escaping () -> Void) -> some View {

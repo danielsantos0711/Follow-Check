@@ -12,8 +12,11 @@ struct HomeScreen: View {
                 if model.accountId.isEmpty && !model.sessionAvailable {
                     ConnectCard(model: model)
                 } else {
+                    // A running check or a protection pause matters more than the circle: show it first.
+                    let urgent = model.isScanning || model.safetyBlocked
+                    if urgent { CheckCard(model: model) }
                     if let snapshot = model.snapshot { circleCard(snapshot) } else { firstCheckCard }
-                    CheckCard(model: model)
+                    if !urgent { CheckCard(model: model) }
                     changes
                     watchlistSummary
                 }
@@ -53,7 +56,7 @@ struct HomeScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             CircleVenn(followers: s.followers, following: s.following, mutuals: s.mutuals)
-                .frame(height: 190)
+                .frame(height: 160)
                 .padding(.vertical, 4)
             HStack(spacing: 0) {
                 axis("Seguem-te", s.followers, alignment: .leading)

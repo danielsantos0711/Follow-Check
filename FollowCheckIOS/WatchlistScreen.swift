@@ -122,6 +122,7 @@ struct TargetCard: View {
                 ListTile(title: "Seguidores", health: target.followersHealth)
                 ListTile(title: "A seguir", health: target.followingHealth)
             }
+            .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 if target.baselineReady && !latest.isEmpty {
                     Text("\(latest.count) \(latest.count == 1 ? "mudança" : "mudanças")").foregroundStyle(Theme.signalInk).fontWeight(.semibold)
@@ -155,10 +156,10 @@ struct ListTile: View {
                     Text(observed.formatted()).font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
                     Text("/ \(reported.formatted())").font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(Theme.ink3)
                 }
-                Label("Parcial · sem comparação", systemImage: "circle.lefthalf.filled").font(.caption2.weight(.semibold)).foregroundStyle(Theme.caution)
+                Label("Parcial", systemImage: "circle.lefthalf.filled").font(.caption2.weight(.semibold)).foregroundStyle(Theme.caution)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(12)
         .background(Theme.raised, in: .rect(cornerRadius: 14, style: .continuous))
     }
@@ -230,6 +231,7 @@ struct TargetDetail: View {
                 ListTile(title: "Seguidores", health: target.followersHealth)
                 ListTile(title: "A seguir", health: target.followingHealth)
             }
+            .fixedSize(horizontal: false, vertical: true)
             Text((target.lastSuccess.map { "Último check " + RelativeTime.short($0) } ?? "Sem check concluído") + " · a cada " + RelativeTime.interval(target.intervalMinutes))
                 .font(.footnote).foregroundStyle(Theme.ink2)
         }
